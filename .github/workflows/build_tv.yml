@@ -16,6 +16,11 @@ on:
           - https://gitee.com/cyh92/ok-tv.git
           - https://github.com/cyh92/ok-tv.git
           - https://github.com/qfeng3168/TV.git
+          - 自定义地址
+        custom_url:
+          description: '自定义仓库地址（仅当上面选择「自定义地址」时生效）'
+          required: false
+          type: string
         branch:
           description: '请输入要编译的分支名'
           required: true
@@ -33,7 +38,24 @@ jobs:
       contents: write
 
     steps:
-    # 1. 先拉取【你自己 GitHub 仓库】所有文件（tv/、jks、脚本）
+      # 新增：解析最终仓库地址
+      - name: 解析仓库地址
+        id: parse_repo
+        run: |
+          selected_url="${{ inputs.url }}"
+          custom_input="${{ inputs.custom_url }}"
+          if [[ "$selected_url" == "自定义地址" ]]; then
+            if [[ -z "$custom_input" ]]; then
+              echo "ERROR: 选择「自定义地址」时，必须在下方填写完整仓库URL！"
+              exit 1
+            fi
+            final_url="$custom_input"
+          else
+            final_url="$selected_url"
+          fi
+          echo "final_url=$final_url" >> $GITHUB_OUTPUT
+          echo "最终使用仓库: $final_url"
+      # 1. 先拉取【你自己 GitHub 仓库】所有文件（tv/、jks、脚本）
       - name: 检出当前仓库
         uses: actions/checkout@v4
           # 1. 直接用 git clone 拉取 Gitee 仓库（彻底修复来源问题）
@@ -41,7 +63,7 @@ jobs:
 
       - name: 克隆 Gitee ok-tv 代码 (${{ github.event.inputs.branch }} 分支)
         run: |
-          git clone --depth 1 -b ${{ github.event.inputs.branch }} ${{ github.event.inputs.url }} ok-tv
+          git clone --depth 1 -b ${{ github.event.inputs.branch }} ${{ steps.parse_repo.outputs.final_url }} ok-tv
 
       # 2. 设置 JDK 17
       - name: 设置 JDK 17
