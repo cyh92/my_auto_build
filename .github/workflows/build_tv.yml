@@ -15,6 +15,7 @@ on:
           options:
           - https://gitee.com/cyh92/ok-tv.git
           - https://github.com/cyh92/ok-tv.git
+          - https://github.com/qfeng3168/TV.git
         branch:
           description: '请输入要编译的分支名'
           required: true
