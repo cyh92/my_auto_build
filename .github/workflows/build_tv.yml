@@ -60,7 +60,10 @@ jobs:
         uses: actions/checkout@v4
           # 1. 直接用 git clone 拉取 Gitee 仓库（彻底修复来源问题）
 
-
+      # ==========【新增 清理旧ok-tv目录】==========
+      - name: 清理旧ok-tv目录
+        run: rm -rf ./ok-tv
+        
       - name: 克隆 Gitee ok-tv 代码 (${{ github.event.inputs.branch }} 分支)
         run: |
           git clone --depth 1 -b ${{ github.event.inputs.branch }} ${{ steps.parse_repo.outputs.final_url }} ok-tv
@@ -127,6 +130,9 @@ jobs:
         working-directory: ./ok-tv
         run: |
          chmod +x gradlew
+         # ==========【新增 gradle clean】==========
+         ./gradlew clean
+         
           if [[ "${{ inputs.add_suffix }}" == "true" ]]; then
           sed -i '/buildTypes/,/^}/ { /release {/,/}/ s/}/        applicationIdSuffix ".cyh"\n}/ }' app/build.gradle
           fi
