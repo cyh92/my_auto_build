@@ -57,6 +57,7 @@ jobs:
           ref: ${{ inputs.target_branch }}
           fetch-depth: 1
           path: media
+          submodules: true
           
       - name: Clone Gitee 代码
         if: inputs.repo_source == 'Gitee'
