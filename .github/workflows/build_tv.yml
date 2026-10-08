@@ -30,6 +30,7 @@ on:
           required: false
           type: boolean
           default: false
+run-name: 构建筱筱影视 ${{ github.event.inputs.branch }}
 
 jobs:
   build:
@@ -69,10 +70,10 @@ jobs:
           git clone --depth 1 -b ${{ github.event.inputs.branch }} ${{ steps.parse_repo.outputs.final_url }} ok-tv
 
       # 2. 设置 JDK 17
-      - name: 设置 JDK 17
+      - name: 设置 JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
           cache: gradle
 
