@@ -30,7 +30,7 @@ jobs:
       - name: Checkout third-party FongMi source
         uses: actions/checkout@v4
         with:
-          repository: FongMi/FongMi
+          repository: FongMi/TV
           ref: fongmi
           fetch-depth: 0
       # 3. 把你仓库里的patches、scripts复制进第三方源码目录
