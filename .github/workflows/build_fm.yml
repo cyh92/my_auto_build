@@ -24,6 +24,8 @@ jobs:
       - name: Checkout my repo (patches & scripts)
         uses: actions/checkout@v4
         with:
+          repository: cyh92/fongmi
+          ref: fongmi
           fetch-depth: 0
           path: myrepo
       # 2. 检出【第三方源码】到主工作目录 $GITHUB_WORKSPACE
