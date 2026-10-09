@@ -38,6 +38,7 @@ jobs:
       # 3. 把你仓库里的patches、scripts复制进第三方源码目录
       - name: Copy patches and scripts from my repo
         run: |
+          ls myrepo
           cp -r myrepo/patches ./
           cp -r myrepo/scripts ./
           ls patches/ scripts/
