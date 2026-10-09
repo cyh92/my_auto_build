@@ -24,8 +24,6 @@ jobs:
       - name: Checkout my repo (patches & scripts)
         uses: actions/checkout@v4
         with:
-          repository: cyh92/fongmi
-          ref: fongmi
           fetch-depth: 0
           path: myrepo
       # 2. 检出【第三方源码】到主工作目录 $GITHUB_WORKSPACE
@@ -35,7 +33,6 @@ jobs:
           repository: FongMi/TV
           ref: fongmi
           fetch-depth: 0
-          clean: false
       # 3. 把你仓库里的patches、scripts复制进第三方源码目录
       - name: Copy patches and scripts from my repo
         run: |
