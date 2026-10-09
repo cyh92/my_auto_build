@@ -131,8 +131,8 @@ jobs:
         env:
           B64KEY: ${{ secrets.SIGNING_KEY }}
           KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-          STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
           set -euo pipefail
 
