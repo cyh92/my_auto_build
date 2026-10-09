@@ -3,9 +3,12 @@ name: Build FM APK
 # FongMi 5.6.9 EXO navigation build: restore native chain and verify navigation state.
 
 on:
-  push:
-    branches: [ fongmi ]
   workflow_dispatch:
+     inputs:
+        branch:
+                description: '请输入要编译的分支名'
+                required: true
+                default: 'fm-new'
 
 permissions:
   contents: write
@@ -34,8 +37,8 @@ jobs:
       - name: Checkout third-party FongMi source
         uses: actions/checkout@v4
         with:
-          repository: FongMi/TV
-          ref: fongmi
+          repository: cyh92/ok-tv
+          ref: ${{ github.event.inputs.branch }} 
           fetch-depth: 0
       # 3. 把你仓库里的patches、scripts复制进第三方源码目录
       - name: Copy patches and scripts from my repo
