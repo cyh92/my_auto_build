@@ -26,6 +26,10 @@ jobs:
         with:
           fetch-depth: 0
           path: myrepo
+      # 把myrepo移动到/tmp，脱离GITHUB_WORKSPACE，不会被后续checkout删除
+      - name: Move patches source to /tmp
+        run: mv myrepo /tmp/myrepo
+        
       # 2. 检出【第三方源码】到主工作目录 $GITHUB_WORKSPACE
       - name: Checkout third-party FongMi source
         uses: actions/checkout@v4
@@ -36,10 +40,10 @@ jobs:
       # 3. 把你仓库里的patches、scripts复制进第三方源码目录
       - name: Copy patches and scripts from my repo
         run: |
-          ls myrepo
-          cp -r myrepo/patches ./
-          cp -r myrepo/scripts ./
-          ls patches/ scripts/
+          ls /tmp/myrepo
+          cp -r /tmp/myrepo/patches ./
+          cp -r /tmp/myrepo/scripts ./
+          ls patches scripts
 
       - name: Checkout matching FongMi Media3 source
         uses: actions/checkout@v4
