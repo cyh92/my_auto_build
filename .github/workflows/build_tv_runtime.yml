@@ -106,11 +106,10 @@ jobs:
           cat local.properties
 
       # 8. 构建运行时 APK（arm64 + arm32）
+      # 必须 cd 到 runtime/ 目录执行，因为 runtime 是独立 Gradle 工程（有自己的 settings.gradle 和 buildSrc）
       - name: 构建 Release APK
-        working-directory: ./ok-tv
+        working-directory: ./ok-tv/runtime
         run: |
-          chmod +x gradlew
-
           MODULE="${{ inputs.module }}"
           CODE="${{ inputs.versionCode }}"
           NAME="${{ inputs.versionName }}"
@@ -126,8 +125,8 @@ jobs:
 
           echo "模块: $MODULE, 属性前缀: $PROP, 版本: $CODE ($NAME)"
 
-          ./gradlew -p runtime clean
-          ./gradlew -p runtime \
+          ../gradlew clean
+          ../gradlew \
             -PtvRuntimeModule=$MODULE \
             -P${PROP}VersionCode=$CODE \
             -P${PROP}VersionName=$NAME \
