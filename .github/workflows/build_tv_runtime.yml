@@ -1,0 +1,194 @@
+name: 构建运行时模块 APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: '要构建的运行时模块'
+        required: true
+        type: choice
+        options:
+          - quickjs
+          - nodejs
+          - python
+          - thunder
+          - mpv
+        default: quickjs
+      versionCode:
+        description: '版本号 (整数, 如 11)'
+        required: true
+        type: string
+        default: '1'
+      versionName:
+        description: '版本名 (如 0.1.8)'
+        required: true
+        type: string
+        default: '1.0.0'
+      url:
+        description: '仓库地址'
+        required: true
+        type: choice
+        options:
+          - https://gitee.com/cyh92/ok-tv.git
+          - https://github.com/cyh92/ok-tv.git
+        default: https://gitee.com/cyh92/ok-tv.git
+      branch:
+        description: '分支名'
+        required: true
+        type: string
+        default: 'fm-new'
+      publishGitee:
+        description: '是否同步发布到 Gitee Release'
+        required: false
+        type: boolean
+        default: false
+
+run-name: 构建 runtime-${{ inputs.module }} v${{ inputs.versionName }} (${{ inputs.branch }})
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # 1. 检出当前仓库（拿签名、media_aars 等）
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
+
+      # 2. 克隆目标仓库
+      - name: 清理旧目录
+        run: rm -rf ./ok-tv
+
+      - name: 克隆代码 (${{ inputs.branch }} 分支)
+        run: git clone --depth 1 -b ${{ inputs.branch }} ${{ inputs.url }} ok-tv
+
+      # 3. JDK
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      # 4. Python 3.10（仅 python 模块需要，其他模块也不影响）
+      - name: 设置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 5. 复制签名文件
+      - name: 复制签名文件
+        run: cp -f sign/fm-tv.jks ok-tv/app/fm-tv.jks
+
+      # 6. 复制预编译 AAR 到 app/libs（mpv 模块需要 lib-mpvplayer + ffmpeg）
+      - name: 复制预编译 AAR
+        run: |
+          SRC_AAR_DIR="${GITHUB_WORKSPACE}/media_aars"
+          TARGET_LIBS="${GITHUB_WORKSPACE}/ok-tv/app/libs"
+          mkdir -p "${TARGET_LIBS}"
+          if [ -d "${SRC_AAR_DIR}" ]; then
+            cp -f "${SRC_AAR_DIR}"/*.aar "${TARGET_LIBS}/" 2>/dev/null || true
+          fi
+          ls -la "${TARGET_LIBS}/" || true
+
+      # 7. 配置签名
+      - name: 配置签名
+        working-directory: ./ok-tv
+        run: |
+          cat > local.properties << EOF
+          storeFile=fm-tv.jks
+          keyAlias=key0
+          storePassword=123456
+          keyPassword=123456
+          openid=${{ secrets.OPENID }}
+          gitee_token=${{ secrets.MY_GITEE_TOKEN }}
+          EOF
+          cat local.properties
+
+      # 8. 构建运行时 APK（arm64 + arm32）
+      - name: 构建 Release APK
+        working-directory: ./ok-tv
+        run: |
+          chmod +x gradlew
+
+          MODULE="${{ inputs.module }}"
+          CODE="${{ inputs.versionCode }}"
+          NAME="${{ inputs.versionName }}"
+
+          # 根据模块名映射 version 属性前缀
+          case "$MODULE" in
+            quickjs) PROP="tvQuickJs" ;;
+            nodejs)  PROP="tvNodeJs" ;;
+            python)  PROP="tvPython" ;;
+            thunder) PROP="tvThunder" ;;
+            mpv)     PROP="tvMpv" ;;
+          esac
+
+          echo "模块: $MODULE, 属性前缀: $PROP, 版本: $CODE ($NAME)"
+
+          ./gradlew -p runtime clean
+          ./gradlew -p runtime \
+            -PtvRuntimeModule=$MODULE \
+            -P${PROP}VersionCode=$CODE \
+            -P${PROP}VersionName=$NAME \
+            assembleArm64Release assembleArm32Release
+
+      # 9. 收集 APK
+      - name: 收集 APK
+        run: |
+          MODULE="${{ inputs.module }}"
+          mkdir -p apks
+          find ok-tv/runtime/build/$MODULE/outputs/apk -name "*.apk" -exec cp {} apks/ \;
+          ls -la apks/
+
+      - name: 获取时间
+        id: time
+        run: |
+          echo "datetime=$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+
+      # 10. 发布到 GitHub Release
+      - name: 发布到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: runtime-${{ inputs.module }}-v${{ inputs.versionName }}-${{ steps.time.outputs.datetime }}
+          name: |
+            runtime-${{ inputs.module }} v${{ inputs.versionName }}
+            (${{ inputs.branch }} 分支, arm64+arm32)
+          body: |
+            - 模块: `${{ inputs.module }}`
+            - 版本: v${{ inputs.versionName }} (code ${{ inputs.versionCode }})
+            - 分支: ${{ inputs.branch }}
+            - ABI: arm64-v8a, armeabi-v7a
+          files: apks/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 11. 可选：发布到 Gitee Release
+      - name: 发布到 Gitee Release
+        if: success() && inputs.publishGitee
+        id: gitee_release
+        uses: nicennnnnnnlee/action-gitee-release@master
+        with:
+          gitee_action: create_release
+          gitee_owner: cyh92
+          gitee_repo: ok-tv
+          gitee_token: ${{ secrets.MY_GITEE_TOKEN }}
+          gitee_tag_name: runtime-${{ inputs.module }}-v${{ inputs.versionName }}-${{ steps.time.outputs.datetime }}
+          gitee_release_name: |
+            runtime-${{ inputs.module }} v${{ inputs.versionName }}
+          gitee_release_body: |
+            - 模块: `${{ inputs.module }}`
+            - 版本: v${{ inputs.versionName }} (code ${{ inputs.versionCode }})
+            - ABI: arm64-v8a, armeabi-v7a
+          gitee_target_commitish: ${{ inputs.branch }}
+
+      - name: 上传 Gitee Assets
+        if: success() && inputs.publishGitee && steps.gitee_release.outputs.release-id
+        uses: nicennnnnnnlee/action-gitee-release@master
+        with:
+          gitee_action: upload_asset
+          gitee_owner: cyh92
+          gitee_repo: ok-tv
+          gitee_token: ${{ secrets.MY_GITEE_TOKEN }}
+          gitee_release_id: ${{ steps.gitee_release.outputs.release-id }}
+          gitee_files: apks/*.apk
