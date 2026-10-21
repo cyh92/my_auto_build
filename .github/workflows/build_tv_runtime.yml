@@ -125,6 +125,7 @@ jobs:
 
           echo "模块: $MODULE, 属性前缀: $PROP, 版本: $CODE ($NAME)"
 
+          chmod +x ../gradlew
           ../gradlew clean
           ../gradlew \
             -PtvRuntimeModule=$MODULE \
