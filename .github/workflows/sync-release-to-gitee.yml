@@ -1,0 +1,192 @@
+name: TV模块同步程序
+
+on:
+  schedule:
+    # 每天 UTC 02:00 运行（北京时间 10:00），同步最新 Release
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'GitHub 源 Release tag 名（留空则同步最新 Release）'
+        required: false
+        default: ' module'
+      github_repo:
+        description: 'GitHub 源仓库（owner/repo），留空则使用当前仓库'
+        required: false
+        default: 'FongMi/Release'
+      gitee_owner:
+        description: 'Gitee 用户名/组织名（留空则用默认值）'
+        required: false
+        default: 'cyh92'
+      gitee_repo:
+        description: 'Gitee 仓库名（留空则用默认值）'
+        required: false
+        default: 'ok-tv'
+      gitee_tag:
+        description: 'Gitee 目标 Release tag 名（留空则与 GitHub tag 相同）'
+        required: false
+        default: 'Module'
+
+env:
+  # 默认 Gitee 目标，可在 workflow_dispatch 输入中覆盖
+  DEFAULT_GITEE_OWNER: 'your-gitee-username'
+  DEFAULT_GITEE_REPO: 'your-gitee-repo'
+
+jobs:
+  sync-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Resolve all parameters
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ github.event.inputs.tag_name }}
+          INPUT_GH_REPO: ${{ github.event.inputs.github_repo }}
+          INPUT_GITEE_OWNER: ${{ github.event.inputs.gitee_owner }}
+          INPUT_GITEE_REPO: ${{ github.event.inputs.gitee_repo }}
+          INPUT_GITEE_TAG: ${{ github.event.inputs.gitee_tag }}
+        run: |
+          # ---- GitHub 源仓库 ----
+          SOURCE_REPO="${INPUT_GH_REPO:-${{ github.repository }}}"
+          echo "GitHub source repo: $SOURCE_REPO"
+
+          # ---- GitHub tag ----
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+            if ! gh release view "$TAG" -R "$SOURCE_REPO" >/dev/null 2>&1; then
+              echo "::error::Release '$TAG' not found in $SOURCE_REPO"
+              exit 1
+            fi
+          else
+            TAG=$(gh release view -R "$SOURCE_REPO" --json tagName -q '.tagName')
+            if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+              echo "::error::No release found in $SOURCE_REPO"
+              exit 1
+            fi
+          fi
+          echo "GitHub tag: $TAG"
+
+          # ---- Gitee 目标仓库 ----
+          GITEE_OWNER="${INPUT_GITEE_OWNER:-${{ env.DEFAULT_GITEE_OWNER }}}"
+          GITEE_REPO="${INPUT_GITEE_REPO:-${{ env.DEFAULT_GITEE_REPO }}}"
+          if [ -z "$GITEE_OWNER" ] || [ -z "$GITEE_REPO" ]; then
+            echo "::error::Gitee owner/repo is required (via input or DEFAULT_ env)"
+            exit 1
+          fi
+          echo "Gitee target: $GITEE_OWNER/$GITEE_REPO"
+
+          # ---- Gitee tag ----
+          GITEE_TAG="${INPUT_GITEE_TAG:-$TAG}"
+          echo "Gitee tag: $GITEE_TAG"
+
+          {
+            echo "gh_repo=$SOURCE_REPO"
+            echo "gh_tag=$TAG"
+            echo "gitee_owner=$GITEE_OWNER"
+            echo "gitee_repo=$GITEE_REPO"
+            echo "gitee_tag=$GITEE_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Get GitHub Release info
+        id: gh_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.resolve.outputs.gh_tag }}"
+          SOURCE_REPO="${{ steps.resolve.outputs.gh_repo }}"
+          RELEASE_JSON=$(gh release view "$TAG" -R "$SOURCE_REPO" \
+            --json tagName,name,body,targetCommitish)
+
+          echo "name=$(echo "$RELEASE_JSON" | jq -r '.name // .tagName')" >> "$GITHUB_OUTPUT"
+          echo "target=$(echo "$RELEASE_JSON" | jq -r '.targetCommitish')" >> "$GITHUB_OUTPUT"
+          {
+            echo "body<<EOF"
+            echo "$RELEASE_JSON" | jq -r '.body // ""'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check if Gitee Release already exists
+        id: gitee_check
+        env:
+          MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
+          GITEE_OWNER: ${{ steps.resolve.outputs.gitee_owner }}
+          GITEE_REPO: ${{ steps.resolve.outputs.gitee_repo }}
+          GITEE_TAG: ${{ steps.resolve.outputs.gitee_tag }}
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://gitee.com/api/v5/repos/$GITEE_OWNER/$GITEE_REPO/releases/tags/$GITEE_TAG?access_token=$MY_GITEE_TOKEN")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Gitee release for tag '$GITEE_TAG' already exists, skip."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download GitHub Release assets
+        if: steps.gitee_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ./release_assets
+          gh release download "${{ steps.resolve.outputs.gh_tag }}" \
+            --dir ./release_assets \
+            --repo "${{ steps.resolve.outputs.gh_repo }}" || true
+          ls -la ./release_assets/
+
+      - name: Create Gitee Release
+        if: steps.gitee_check.outputs.exists == 'false'
+        id: gitee_create
+        env:
+          MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
+          GITEE_OWNER: ${{ steps.resolve.outputs.gitee_owner }}
+          GITEE_REPO: ${{ steps.resolve.outputs.gitee_repo }}
+          GITEE_TAG: ${{ steps.resolve.outputs.gitee_tag }}
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            "https://gitee.com/api/v5/repos/$GITEE_OWNER/$GITEE_REPO/releases" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "access_token": "$MY_GITEE_TOKEN",
+            "tag_name": "$GITEE_TAG",
+            "name": "${{ steps.gh_release.outputs.name }}",
+            "body": $(echo '${{ steps.gh_release.outputs.body }}' | jq -Rs .),
+            "target_commitish": "${{ steps.gh_release.outputs.target }}"
+          }
+          EOF
+          )
+          RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id')
+          if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
+            echo "::error::Failed to create Gitee release: $RESPONSE"
+            exit 1
+          fi
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "Created Gitee release id: $RELEASE_ID"
+
+      - name: Upload assets to Gitee Release
+        if: steps.gitee_check.outputs.exists == 'false' && steps.gitee_create.outputs.release_id != ''
+        env:
+          MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
+          GITEE_OWNER: ${{ steps.resolve.outputs.gitee_owner }}
+          GITEE_REPO: ${{ steps.resolve.outputs.gitee_repo }}
+          RELEASE_ID: ${{ steps.gitee_create.outputs.release_id }}
+        run: |
+          shopt -s nullglob
+          for file in ./release_assets/*; do
+            FILENAME=$(basename "$file")
+            echo "Uploading: $FILENAME"
+            HTTP_CODE=$(curl -s -o /tmp/upload_resp.json -w "%{http_code}" \
+              -X POST \
+              "https://gitee.com/api/v5/repos/$GITEE_OWNER/$GITEE_REPO/releases/$RELEASE_ID/attach_files" \
+              -F "access_token=$MY_GITEE_TOKEN" \
+              -F "file=@$file")
+            if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+              echo "::warning::Upload failed for $FILENAME (HTTP $HTTP_CODE):"
+              cat /tmp/upload_resp.json
+            else
+              echo "Uploaded: $FILENAME"
+            fi
+          done
