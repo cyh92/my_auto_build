@@ -229,6 +229,9 @@ jobs:
             echo "正在上传附件: $file"
             RESP=$(curl -s -X POST \
               -F "access_token=${MY_GITEE_TOKEN}" \
+              -F "owner=${GITEE_OWNER}" \
+              -F "repo=${GITEE_REPO}" \
+              -F "release_id=${RELEASE_ID}" \
               -F "file=@$file" \
               "$API_URL")
             echo "响应: $RESP"
