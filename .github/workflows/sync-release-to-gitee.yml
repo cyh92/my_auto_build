@@ -105,7 +105,7 @@ jobs:
 
       # 关键：先确保 Gitee Release 存在并拿到 release_id，同时删除同名旧附件
       # 因为 module 是滚动 Release，action 的 upload_asset 只追加不覆盖
-      - name: Prepare Gitee Release (ensure exists + delete old assets)
+            - name: Prepare Gitee Release (ensure exists + delete old assets)
         id: prepare
         env:
           MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
@@ -117,22 +117,39 @@ jobs:
           BASE="https://gitee.com/api/v5/repos/$OWNER/$REPO"
 
           echo "Query: $BASE/releases/tags/$TAG"
+
+          # 1. 查询 Release 是否存在（HTTP 状态码与 body 分离）
           TMP=$(mktemp)
           CODE=$(curl -s -o "$TMP" -w "%{http_code}" \
             "$BASE/releases/tags/$TAG?access_token=$MY_GITEE_TOKEN")
           BODY=$(cat "$TMP")
           echo "HTTP $CODE"
-          echo "Body preview:"; head -c 500 "$TMP"; echo
+          echo "Body preview:"
+          head -c 500 "$TMP"; echo
+
+          NEED_CREATE=false
+          RID=""
 
           if [ "$CODE" = "200" ]; then
+            # Gitee 对不存在的 tag 可能返回 200 + null，需视为不存在
             RID=$(echo "$BODY" | jq -r '.id // empty' 2>/dev/null || true)
             if [ -z "$RID" ] || [ "$RID" = "null" ]; then
-              echo "::error::200 but no valid .id in body"
-              exit 1
+              echo "HTTP 200 but body is null -> treat as not found"
+              NEED_CREATE=true
+            else
+              echo "Gitee release exists, id=$RID"
             fi
-            echo "Gitee release exists, id=$RID"
           elif [ "$CODE" = "404" ]; then
-            echo "Not found, creating..."
+            echo "HTTP 404 -> not found"
+            NEED_CREATE=true
+          else
+            echo "::error::Unexpected HTTP $CODE when querying Gitee release"
+            exit 1
+          fi
+
+          # 2. 不存在则创建 Release
+          if [ "$NEED_CREATE" = "true" ]; then
+            echo "Creating Gitee release '$TAG' (target_commitish=$TARGET)"
             CTMP=$(mktemp)
             CCODE=$(curl -s -o "$CTMP" -w "%{http_code}" -X POST "$BASE/releases" \
               -H "Content-Type: application/json" \
@@ -147,30 +164,43 @@ jobs:
           EOF
             )
             CBODY=$(cat "$CTMP")
-            echo "Create HTTP $CCODE"; head -c 500 "$CTMP"; echo
+            echo "Create HTTP $CCODE"
+            echo "Create body preview:"
+            head -c 500 "$CTMP"; echo
+
             if [ "$CCODE" != "201" ] && [ "$CCODE" != "200" ]; then
-              echo "::error::Create failed (HTTP $CCODE)"; exit 1
+              echo "::error::Failed to create Gitee release (HTTP $CCODE)"
+              exit 1
             fi
+
             RID=$(echo "$CBODY" | jq -r '.id // empty' 2>/dev/null || true)
-            [ -z "$RID" ] && { echo "::error::No id in create response"; exit 1; }
-            echo "Created id=$RID"
-          else
-            echo "::error::Unexpected HTTP $CODE"; exit 1
+            if [ -z "$RID" ] || [ "$RID" = "null" ]; then
+              echo "::error::Create response has no valid id"
+              exit 1
+            fi
+            echo "Created release id=$RID"
           fi
+
           echo "release_id=$RID" >> "$GITHUB_OUTPUT"
 
-          # 删除同名旧附件
+          # 3. 删除同名旧附件（module 为滚动 Release，需覆盖）
           ETMP=$(mktemp)
-          curl -s -o "$ETMP" "$BASE/releases/$RID/attach_files?access_token=$MY_GITEE_TOKEN"
+          curl -s -o "$ETMP" \
+            "$BASE/releases/$RID/attach_files?access_token=$MY_GITEE_TOKEN"
           EXISTING=$(cat "$ETMP")
-          echo "Existing attachments:"; jq -r '.[]? | "\(.id)\t\(.name)"' "$ETMP" 2>/dev/null || echo "(none)"
+          echo "Existing attachments:"
+          jq -r '.[]? | "\(.id)\t\(.name)"' "$ETMP" 2>/dev/null || echo "(none or not json)"
+
           shopt -s nullglob
           for file in ./release_assets/*; do
             NAME=$(basename "$file")
-            OLD_ID=$(echo "$EXISTING" | jq -r --arg n "$NAME" '.[]? | select(.name==$n) | .id' 2>/dev/null | head -n1)
+            OLD_ID=$(echo "$EXISTING" | jq -r --arg n "$NAME" \
+              '.[]? | select(.name==$n) | .id' 2>/dev/null | head -n1)
             if [ -n "$OLD_ID" ] && [ "$OLD_ID" != "null" ]; then
-              echo "Deleting old: $NAME (id=$OLD_ID)"
-              curl -s -X DELETE "$BASE/releases/$RID/attach_files/$OLD_ID?access_token=$MY_GITEE_TOKEN" >/dev/null
+              echo "Deleting old attachment: $NAME (id=$OLD_ID)"
+              curl -s -X DELETE \
+                "$BASE/releases/$RID/attach_files/$OLD_ID?access_token=$MY_GITEE_TOKEN" \
+                >/dev/null
             fi
           done
       - name: Upload assets via action-gitee-release
