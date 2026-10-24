@@ -1,4 +1,4 @@
-name: Sync module Release to Gitee
+name: 自动同步TV扩展模块
 
 on:
   schedule:
