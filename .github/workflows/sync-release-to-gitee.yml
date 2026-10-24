@@ -105,7 +105,7 @@ jobs:
 
       # 关键：先确保 Gitee Release 存在并拿到 release_id，同时删除同名旧附件
       # 因为 module 是滚动 Release，action 的 upload_asset 只追加不覆盖
-            - name: Prepare Gitee Release (ensure exists + delete old assets)
+      - name: Prepare Gitee Release (ensure exists + delete old assets)
         id: prepare
         env:
           MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
