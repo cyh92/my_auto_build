@@ -203,15 +203,41 @@ jobs:
                 >/dev/null
             fi
           done
-      - name: Upload assets via action-gitee-release
+      # - name: Upload assets via action-gitee-release
+      #   if: hashFiles('release_assets/*') != ''
+      #   uses: nicennnnnnnlee/action-gitee-release@master
+      #   with:
+      #     gitee_action: upload_asset
+      #     gitee_owner: ${{ steps.resolve.outputs.gitee_owner }}
+      #     gitee_repo: ${{ steps.resolve.outputs.gitee_repo }}
+      #     gitee_token: ${{ secrets.MY_GITEE_TOKEN }}
+      #     gitee_release_id: ${{ steps.prepare.outputs.release_id }}
+      #     gitee_upload_retry_times: 3
+      #     gitee_files: |
+      #       release_assets/*
+      - name: 上传文件到Gitee发布
         if: hashFiles('release_assets/*') != ''
-        uses: nicennnnnnnlee/action-gitee-release@master
-        with:
-          gitee_action: upload_asset
-          gitee_owner: ${{ steps.resolve.outputs.gitee_owner }}
-          gitee_repo: ${{ steps.resolve.outputs.gitee_repo }}
-          gitee_token: ${{ secrets.MY_GITEE_TOKEN }}
-          gitee_release_id: ${{ steps.prepare.outputs.release_id }}
-          gitee_upload_retry_times: 3
-          gitee_files: |
-            release_assets/*
+        env:
+          MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
+          GITEE_OWNER: ${{ steps.resolve.outputs.gitee_owner }}
+          GITEE_REPO: ${{ steps.resolve.outputs.gitee_repo }}
+          RELEASE_ID: ${{ steps.prepare.outputs.release_id }}
+        run: |
+          API_URL="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${RELEASE_ID}/attach_files"
+          shopt -s nullglob
+          for file in ./release_assets/*; do
+            echo "正在上传附件: $file"
+            RESP=$(curl -s -X POST \
+              -F "access_token=${MY_GITEE_TOKEN}" \
+              -F "file=@$file" \
+              "$API_URL")
+            echo "响应: $RESP"
+            # 可选：校验返回是否包含 id / name，失败则退出
+            NAME=$(echo "$RESP" | jq -r '.name // empty' 2>/dev/null || true)
+            if [ -z "$NAME" ]; then
+              echo "::warning::上传可能失败: $file"
+            else
+              echo "上传完成：$NAME"
+            fi
+          done
+          echo "所有附件上传完成"
