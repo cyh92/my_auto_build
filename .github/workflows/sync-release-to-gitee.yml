@@ -2,15 +2,15 @@ name: Sync module Release to Gitee
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *'   # 每天 UTC 02:00
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'GitHub 源 Release tag（默认 module）'
+        description: 'GitHub 源 Release tag'
         required: false
         default: 'module'
       github_repo:
-        description: 'GitHub 源仓库（owner/repo）'
+        description: 'GitHub 源仓库'
         required: false
         default: 'FongMi/Release'
       gitee_owner:
@@ -21,12 +21,8 @@ on:
         description: 'Gitee 仓库名'
         required: false
         default: 'ok-tv'
-      gitee_tag:
-        description: 'Gitee 目标 tag（留空则与源 tag 相同）'
-        required: false
-        default: 'module'
       gitee_target_branch:
-        description: 'Gitee 创建 Release 用的 target_commitish（默认 master）'
+        description: 'Gitee 创建 Release 用的 target_commitish'
         required: false
         default: 'fongmi'
 
@@ -37,13 +33,14 @@ env:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
+
     steps:
-      - name: Upgrade gh
+      - name: Upgrade gh (确保 release view/download 正常)
         run: |
           gh --version || true
-          # 确保 gh 为新版，避免 release view 解析异常
           sudo apt-get update -qq && sudo apt-get install -y -qq gh || true
           gh --version
 
@@ -55,16 +52,14 @@ jobs:
           INPUT_GH_REPO: ${{ github.event.inputs.github_repo }}
           INPUT_GITEE_OWNER: ${{ github.event.inputs.gitee_owner }}
           INPUT_GITEE_REPO: ${{ github.event.inputs.gitee_repo }}
-          INPUT_GITEE_TAG: ${{ github.event.inputs.gitee_tag }}
         run: |
           SOURCE_REPO="${INPUT_GH_REPO:-FongMi/Release}"
           TAG="${INPUT_TAG:-module}"
-          TAG=$(echo "$TAG" | tr -d '[:space:]')   # 去掉不可见字符
-          echo "Source repo: $SOURCE_REPO, tag: [$TAG]"
+          TAG=$(echo "$TAG" | tr -d '[:space:]')
 
-          # 失败时打印真实错误，而不是笼统的 not found
+          echo "Source: $SOURCE_REPO, tag: [$TAG]"
           if ! ERR=$(gh release view "$TAG" -R "$SOURCE_REPO" --json tagName 2>&1 >/dev/null); then
-            echo "::error::gh release view failed for '$TAG' in $SOURCE_REPO"
+            echo "::error::gh release view failed for '$TAG'"
             echo "gh error: $ERR"
             exit 1
           fi
@@ -72,8 +67,7 @@ jobs:
 
           GITEE_OWNER="${INPUT_GITEE_OWNER:-${{ env.DEFAULT_GITEE_OWNER }}}"
           GITEE_REPO="${INPUT_GITEE_REPO:-${{ env.DEFAULT_GITEE_REPO }}}"
-          GITEE_TAG="${INPUT_GITEE_TAG:-$TAG}"
-          echo "Gitee target: $GITEE_OWNER/$GITEE_REPO, tag: $GITEE_TAG"
+          GITEE_TAG="$TAG"   # module 直接作为 Gitee tag
 
           {
             echo "gh_repo=$SOURCE_REPO"
@@ -109,8 +103,10 @@ jobs:
             --repo "${{ steps.resolve.outputs.gh_repo }}"
           ls -la ./release_assets/
 
-      - name: Ensure Gitee Release exists
-        id: gitee_release
+      # 关键：先确保 Gitee Release 存在并拿到 release_id，同时删除同名旧附件
+      # 因为 module 是滚动 Release，action 的 upload_asset 只追加不覆盖
+      - name: Prepare Gitee Release (ensure exists + delete old assets)
+        id: prepare
         env:
           MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
         run: |
@@ -118,18 +114,19 @@ jobs:
           REPO="${{ steps.resolve.outputs.gitee_repo }}"
           TAG="${{ steps.resolve.outputs.gitee_tag }}"
           TARGET="${{ steps.resolve.outputs.gitee_target_branch }}"
+          BASE="https://gitee.com/api/v5/repos/$OWNER/$REPO"
 
+          # 1. 查询 Release 是否存在
           RESP=$(curl -s -w "\n%{http_code}" \
-            "https://gitee.com/api/v5/repos/$OWNER/$REPO/releases/tags/$TAG?access_token=$MY_GITEE_TOKEN")
+            "$BASE/releases/tags/$TAG?access_token=$MY_GITEE_TOKEN")
           BODY=$(echo "$RESP" | sed '$d'); CODE=$(echo "$RESP" | tail -n1)
 
           if [ "$CODE" = "200" ]; then
             RID=$(echo "$BODY" | jq -r '.id')
             echo "Gitee release exists, id=$RID"
           else
-            echo "Creating Gitee release '$TAG' (target_commitish=$TARGET)"
-            CREATE=$(curl -s -X POST \
-              "https://gitee.com/api/v5/repos/$OWNER/$REPO/releases" \
+            echo "Creating Gitee release '$TAG' (target=$TARGET)"
+            CREATE=$(curl -s -X POST "$BASE/releases" \
               -H "Content-Type: application/json" \
               -d @- <<EOF
           {
@@ -143,46 +140,37 @@ jobs:
             )
             RID=$(echo "$CREATE" | jq -r '.id')
             if [ "$RID" = "null" ] || [ -z "$RID" ]; then
-              echo "::error::Failed to create Gitee release: $CREATE"
+              echo "::error::Failed to create release: $CREATE"
               exit 1
             fi
-            echo "Created Gitee release, id=$RID"
+            echo "Created release id=$RID"
           fi
           echo "release_id=$RID" >> "$GITHUB_OUTPUT"
 
-      - name: Upload / overwrite assets on Gitee
-        env:
-          MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
-          RID: ${{ steps.gitee_release.outputs.release_id }}
-        run: |
-          OWNER="${{ steps.resolve.outputs.gitee_owner }}"
-          REPO="${{ steps.resolve.outputs.gitee_repo }}"
-          BASE="https://gitee.com/api/v5/repos/$OWNER/$REPO/releases/$RID"
-
-          # 拉取 Gitee 侧现有附件列表
-          EXISTING=$(curl -s "$BASE/attach_files?access_token=$MY_GITEE_TOKEN")
-          echo "$EXISTING" | jq -r '.[]? | "\(.id)\t\(.name)"' || true
-
+          # 2. 获取现有附件列表，删除与本地待上传文件同名的旧附件
+          EXISTING=$(curl -s "$BASE/releases/$RID/attach_files?access_token=$MY_GITEE_TOKEN")
           shopt -s nullglob
           for file in ./release_assets/*; do
             NAME=$(basename "$file")
-            # 若同名附件已存在，先删除旧附件（滚动 Release 需要覆盖）
-            OLD_ID=$(echo "$EXISTING" | jq -r --arg n "$NAME" '.[]? | select(.name==$n) | .id' | head -n1)
+            OLD_ID=$(echo "$EXISTING" | jq -r --arg n "$NAME" \
+              '.[]? | select(.name==$n) | .id' | head -n1)
             if [ -n "$OLD_ID" ] && [ "$OLD_ID" != "null" ]; then
-              echo "Deleting old attachment $NAME (id=$OLD_ID)"
+              echo "Deleting old attachment: $NAME (id=$OLD_ID)"
               curl -s -X DELETE \
-                "https://gitee.com/api/v5/repos/$OWNER/$REPO/releases/$RID/attach_files/$OLD_ID?access_token=$MY_GITEE_TOKEN" \
+                "$BASE/releases/$RID/attach_files/$OLD_ID?access_token=$MY_GITEE_TOKEN" \
                 >/dev/null
             fi
-
-            echo "Uploading $NAME"
-            CODE=$(curl -s -o /tmp/up.json -w "%{http_code}" -X POST \
-              "$BASE/attach_files" \
-              -F "access_token=$MY_GITEE_TOKEN" \
-              -F "file=@$file")
-            if [ "$CODE" != "201" ] && [ "$CODE" != "200" ]; then
-              echo "::warning::Upload failed for $NAME (HTTP $CODE): $(cat /tmp/up.json)"
-            else
-              echo "Uploaded $NAME"
-            fi
           done
+
+      - name: Upload assets via action-gitee-release
+        if: hashFiles('release_assets/*') != ''
+        uses: nicennnnnnnlee/action-gitee-release@master
+        with:
+          gitee_action: upload_asset
+          gitee_owner: ${{ steps.resolve.outputs.gitee_owner }}
+          gitee_repo: ${{ steps.resolve.outputs.gitee_repo }}
+          gitee_token: ${{ secrets.MY_GITEE_TOKEN }}
+          gitee_release_id: ${{ steps.prepare.outputs.release_id }}
+          gitee_upload_retry_times: 3
+          gitee_files: |
+            release_assets/*
