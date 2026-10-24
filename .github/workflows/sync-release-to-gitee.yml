@@ -27,8 +27,8 @@ on:
         default: 'fongmi'
 
 env:
-  DEFAULT_GITEE_OWNER: 'your-gitee-username'
-  DEFAULT_GITEE_REPO: 'your-gitee-repo'
+  DEFAULT_GITEE_OWNER: 'cyh92'
+  DEFAULT_GITEE_REPO: 'ok-tv'
 
 jobs:
   sync:
