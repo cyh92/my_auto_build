@@ -105,7 +105,7 @@ jobs:
 
       # 关键：先确保 Gitee Release 存在并拿到 release_id，同时删除同名旧附件
       # 因为 module 是滚动 Release，action 的 upload_asset 只追加不覆盖
-      - name: Prepare Gitee Release (ensure exists + delete old assets)
+      - name: Prepare Gitee Release (ensure exists + delete ALL old assets)
         id: prepare
         env:
           MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
@@ -183,38 +183,35 @@ jobs:
 
           echo "release_id=$RID" >> "$GITHUB_OUTPUT"
 
-          # 3. 删除同名旧附件（module 为滚动 Release，需覆盖）
+          # 3. 获取并删除该 Release 下的【所有】旧附件
+          echo "Fetching all existing attachments..."
           ETMP=$(mktemp)
           curl -s -o "$ETMP" \
             "$BASE/releases/$RID/attach_files?access_token=$MY_GITEE_TOKEN"
           EXISTING=$(cat "$ETMP")
-          echo "Existing attachments:"
-          jq -r '.[]? | "\(.id)\t\(.name)"' "$ETMP" 2>/dev/null || echo "(none or not json)"
 
-          shopt -s nullglob
-          for file in ./release_assets/*; do
-            NAME=$(basename "$file")
-            OLD_ID=$(echo "$EXISTING" | jq -r --arg n "$NAME" \
-              '.[]? | select(.name==$n) | .id' 2>/dev/null | head -n1)
-            if [ -n "$OLD_ID" ] && [ "$OLD_ID" != "null" ]; then
-              echo "Deleting old attachment: $NAME (id=$OLD_ID)"
-              curl -s -X DELETE \
-                "$BASE/releases/$RID/attach_files/$OLD_ID?access_token=$MY_GITEE_TOKEN" \
-                >/dev/null
-            fi
-          done
-      # - name: Upload assets via action-gitee-release
-      #   if: hashFiles('release_assets/*') != ''
-      #   uses: nicennnnnnnlee/action-gitee-release@master
-      #   with:
-      #     gitee_action: upload_asset
-      #     gitee_owner: ${{ steps.resolve.outputs.gitee_owner }}
-      #     gitee_repo: ${{ steps.resolve.outputs.gitee_repo }}
-      #     gitee_token: ${{ secrets.MY_GITEE_TOKEN }}
-      #     gitee_release_id: ${{ steps.prepare.outputs.release_id }}
-      #     gitee_upload_retry_times: 3
-      #     gitee_files: |
-      #       release_assets/*
+          # 使用 jq 提取所有附件的 id
+          # 注意：Gitee 的 attach_files 接口默认可能带有分页限制，若附件极多需额外处理，但一般几十个没问题
+          ALL_IDS=$(echo "$EXISTING" | jq -r '.[]?.id' 2>/dev/null || true)
+
+          if [ -z "$ALL_IDS" ]; then
+            echo "No existing attachments found (or not json)."
+          else
+            echo "Found existing attachment IDs to delete:"
+            echo "$ALL_IDS"
+            
+            # 遍历所有提取到的 ID 并执行删除
+            for OLD_ID in $ALL_IDS; do
+              if [ -n "$OLD_ID" ] && [ "$OLD_ID" != "null" ]; then
+                echo "Deleting attachment id=$OLD_ID"
+                curl -s -X DELETE \
+                  "$BASE/releases/$RID/attach_files/$OLD_ID?access_token=$MY_GITEE_TOKEN" \
+                  >/dev/null
+              fi
+            done
+            echo "All old attachments deleted."
+          fi
+      
       - name: 上传文件到Gitee发布
         if: hashFiles('release_assets/*') != ''
         env:
