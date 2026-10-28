@@ -217,21 +217,28 @@ jobs:
           if [ "$COUNT" -lt 11 ]; then
             echo "::error::只收集到 $COUNT 个 aar，少于预期的 12 个，检查模块名"
             exit 1
-          fi
-      - name: Prepare aar directory
-        run: |
-          mkdir -p media_aars
-          cp out/*.aar media_aars/
-          # ========== 新增：复制 media_aars 到工作根目录 ${GITHUB_WORKSPACE} ==========
-          echo "📤 将 media_aars 目录复制到 ${GITHUB_WORKSPACE}"
-          cp -r media_aars "${GITHUB_WORKSPACE}/"
+          done
 
-      - name: 提交media_aars变更到仓库
-        working-directory: ${{ github.workspace }}
+      - name: Prepare aar directory (inside self repo)
+        run: |
+          # 当前目录：self/（仓库根）
+          mkdir -p media_aars
+          # 把 out 下所有 aar 复制进 media_aars
+          AAR_FILES=(out/*.aar)
+          if [[ -f "${AAR_FILES[0]}" ]]; then
+            cp out/*.aar media_aars/
+            echo "✅ 已复制 aar 到 ./media_aars"
+            ls -lh media_aars/
+          else
+            echo "::error::out 目录没有 aar 文件，无法复制到 media_aars"
+            exit 1
+          fi
+
+      - name: Commit media_aars changes (run inside self repo)
+        working-directory: self
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      
           git add media_aars/
           # 判断是否有变更
           if git diff --cached --quiet; then
@@ -240,11 +247,12 @@ jobs:
             git commit -m "🤖 自动更新收集的AAR包 media_aars"
             git push
           fi
+
       - name: Upload aars
         uses: actions/upload-artifact@v4
         with:
           name: media3-aars
-          path: out/*.aar
+          path: self/out/*.aar
           if-no-files-found: error
           retention-days: 90
       
