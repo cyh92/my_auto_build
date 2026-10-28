@@ -15,17 +15,6 @@ on:
         description: 'FongMi/media 的分支（必须用 release-1.11.0-fongmi，官方 release 分支缺自研模块）'
         required: false
         default: 'release-1.11.0-fongmi'
-      commit:
-        description: '编完自动提交 aar 到 app/libs/'
-        type: boolean
-        required: false
-        default: true
-  push:
-    branches: [ fongmi ]
-    paths:
-      - 'tools/patch_media3.py'
-      - '.github/workflows/deps-media3.yml'
-
 permissions:
   contents: write
 
