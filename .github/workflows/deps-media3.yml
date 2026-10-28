@@ -1,87 +1,86 @@
-name: deps-media3
+name: 构建Media3依赖(补齐版)
 
-# 用途：从 FongMi/media 编译出 12 个 media3 模块的 aar
-# 触发：手动（Actions 页面点 Run workflow）
-# 产出：artifact "media3-aars" —— 下载后解压到 app/libs/
-#
-# 为什么单独一条流水线：
-#   media3 编译约 5-10 分钟，只在依赖升级时需要跑一次。
-#   日常改 UI 走 app.yml，不碰这里。
+# ======================= 【可修改变量】 =======================
+env:
+  REPO_URL: FongMi/media  # 仓库地址
+# ==============================================================
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发
     inputs:
-      media_ref:
-        description: 'FongMi/media 的分支（必须用 release-1.11.0-fongmi，官方 release 分支缺自研模块）'
-        required: false
+      repo_source:
+          description: 代码仓库来源
+          type: choice
+          options:
+            - GitHub
+            - Gitee
+          required: true
+          default: GitHub
+      target_branch:
+        description: '输入要编译的分支名'
+        required: true
         default: 'release-1.11.0-fongmi'
+        type: string
+      update_branch:
+        description: '输入源仓库分支'
+        required: true
+        default: 'fm-new'
+        type: string
+      copy_to_oktv:
+        description: '是否更新源仓库'
+        required: true
+        default: false
+        type: boolean
+      delrow:
+        description: '删除示例和测试库'
+        required: true
+        default: false
+        type: boolean
+
 permissions:
   contents: write
 
 jobs:
-  build-media3:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
     steps:
-      - name: Checkout this repo (for tools/)
+      - name: Checkout 当前主仓库代码
         uses: actions/checkout@v4
         with:
-          path: self
-          clean: false
-
-      - name: Checkout FongMi/media
+          persist-credentials: true
+          
+      - name: Checkout code
+        if: inputs.repo_source == 'GitHub'
         uses: actions/checkout@v4
         with:
-          repository: FongMi/media
-          ref: ${{ inputs.media_ref || 'release-1.11.0-fongmi' }}
+          repository: ${{ env.REPO_URL }}
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 1
           path: media
-
-      - name: Record source revision
+          submodules: true
+          
+      - name: Clone Gitee 代码
+        if: inputs.repo_source == 'Gitee'
         run: |
-          cd media
-          echo "media commit: $(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          # 清空当前目录，避免 git clone . 报错目录非空
+          rm -rf ./*
+          git clone -b ${{ inputs.target_branch }} --depth 1 https://cyh92:${{ secrets.MY_GITEE_TOKEN }}@gitee.com/cyh92/media.git media
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: temurin
-
-      - name: Ensure Android platform 36
+      # ====================== 替换 Gradle 下载源为腾讯云 ======================
+      - name: Replace Gradle Distribution URL with Tencent Mirror
         run: |
-          # runner 自带 Android SDK，不再用 setup-android@v3
-          # （v3 会尝试 sdkmanager "tools"，新版 cmdline-tools 已移除该包，必失败）
-          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
-          echo "SDK = $SDK"
-          echo "--- 已有 platforms ---"
-          ls "$SDK/platforms" 2>/dev/null || echo "(空)"
-
-          SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
-          echo "sdkmanager = $SM"
-
-          if ! ls "$SDK/platforms" 2>/dev/null | grep -q "android-36"; then
-            echo "安装 android-36 ..."
-            yes 2>/dev/null | "$SM" --licenses > /dev/null 2>&1 || true
-            "$SM" "platforms;android-36" 2>&1 | tail -5 \
-              || echo "::warning::android-36 安装失败，尝试沿用已有平台"
+          GRADLE_PROPS="gradle/wrapper/gradle-wrapper.properties"
+          if [ -f "$GRADLE_PROPS" ]; then
+            sed -i 's|services.gradle.org/distributions|mirrors.cloud.tencent.com/gradle|g' "$GRADLE_PROPS"
+            echo "✅ 已替换 Gradle 下载源为腾讯云镜像"
+            cat "$GRADLE_PROPS"
           else
-            echo "android-36 已存在"
+            echo "⚠️ 未找到 gradle-wrapper.properties 文件，跳过替换"
           fi
-          ls "$SDK/platforms"
-
-      - name: Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: media3-gradle-${{ hashFiles('media/gradle/libs.versions.toml', 'tools/patch_media3.py') }}
-          restore-keys: media3-gradle-
-
+      # ====================================================================
       - name: Patch media3 (补齐作者私有扩展)
         run: |
-          python3 self/tools/patch_media3.py media
+          python3 ${GITHUB_WORKSPACE}/tools/patch_media3.py media
           echo "--- 校验补丁生效 ---"
           test -f media/libraries/common/src/main/java/androidx/media3/common/DiscMenuState.java
           test -f media/libraries/common/src/main/java/androidx/media3/common/DiscMenuController.java
@@ -90,144 +89,82 @@ jobs:
           grep -q "onDiscMenuStateChanged" media/libraries/common/src/main/java/androidx/media3/common/Player.java
           grep -q "setDiscMenuController" media/libraries/ui/src/main/java/androidx/media3/ui/PlayerView.java
           echo "补丁校验通过"
-
-      - name: Verify patch applied
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+      - name: 修复缺失混淆文件和移除示例库
+        if: inputs.delrow==true
         run: |
-          set -uo pipefail
-          F=media/libraries/ui/src/main/java/androidx/media3/ui/danmaku/DanmakuPlayerViewController.java
-          echo "=== 文件存在? ==="
-          ls -l "$F" || { echo "::error::文件不存在"; exit 1; }
-          echo "=== post 方法? ==="
-          grep -n "post" "$F" || echo "!!! 源码里没有 post !!!"
-          echo "=== 行数 ==="
-          wc -l "$F"
-
-      - name: Purge build outputs and cache
+          # 修复缺失混淆文件
+          # touch libraries/transformer/proguard-rules.txt
+          # touch libraries/muxer/proguard-rules.txt
+          # touch libraries/effect_lottie/proguard-rules.txt
+          # touch libraries/effect/proguard-rules.txt
+          # # 移除崩溃的预览Demo模块
+          # sed -i '/demo/d' settings.gradle          
+          # sed -i '/test-/d' build-logic-settings/src/main/kotlin/androidx/media3/buildlogic/Media3Modules.kt
+          
+          sed '211,244d' build-logic-settings/src/main/kotlin/androidx/media3/buildlogic/Media3Modules.kt
+          rm -rf demos
+          rm -rf libraries/test*
+        
+      - name: 构建
+        working-directory: ./media
         run: |
-          set -uo pipefail
-          echo "--- gradle build cache ---"
-          du -sh ~/.gradle/caches/build-cache-1 2>/dev/null || echo "(none)"
-          rm -rf ~/.gradle/caches/build-cache-1
-          echo "--- module build dirs ---"
-          # clean task 会显示 UP-TO-DATE 而不清产物，直接删目录最可靠
-          rm -rf media/libraries/*/build media/libraries/*/buildout
-          ls -d media/libraries/*/build 2>/dev/null | head -3 || echo "(all removed)"
+         chmod +x gradlew
+         ./gradlew assembleRelease
 
-      - name: Build media3 modules
-        working-directory: media
-        run: |
-          chmod +x gradlew
-          echo "--- 删除旧产物（clean 不清 buildout）---"
-          rm -rf libraries/*/build libraries/*/buildout
-          ls -d libraries/*/buildout 2>/dev/null | head -3 || echo "(buildout 已清空)"
-          ./gradlew --no-daemon --stacktrace --no-build-cache --rerun-tasks \
-            -x lint -x test \
-            :lib-common:assembleRelease \
-            :lib-exoplayer:assembleRelease \
-            :lib-exoplayer-dash:assembleRelease \
-            :lib-exoplayer-hls:assembleRelease \
-            :lib-exoplayer-rtsp:assembleRelease \
-            :lib-datasource:assembleRelease \
-            :lib-datasource-okhttp:assembleRelease \
-            :lib-database:assembleRelease \
-            :lib-extractor:assembleRelease \
-            :lib-effect:assembleRelease \
-            :lib-ui:assembleRelease \
-            :lib-session:assembleRelease \
-            :lib-mpvplayer:assembleRelease \
-            :lib-ui-danmaku:assembleRelease
+      # - name: Build Release AAR
+      #   run: ./gradlew assembleRelease
+        
+      - name: Get current date
+        id: date
+        run: echo "datetime=$(date +%Y%m%d%H%M%S%3N)" >> $GITHUB_OUTPUT
 
-      - name: Inspect built aar
+      # 只收集 move.txt 中列出的 AAR
+      - name: 通过move.txt列表收集aar
+        working-directory: ./media
         run: |
-          set -uo pipefail
-          A=media/libraries/ui/buildout/outputs/aar/lib-ui-release.aar
-          echo "=== aar 大小 / 时间 ==="
-          ls -l "$A"
-          rm -rf /tmp/insp && mkdir -p /tmp/insp
-          cd /tmp/insp && unzip -o "$GITHUB_WORKSPACE/$A" classes.jar > /dev/null 2>&1
-          echo "=== class 里的 post ==="
-          javap -classpath classes.jar androidx.media3.ui.danmaku.DanmakuPlayerViewController 2>&1 | head -20
-          echo "=== post 命中数 ==="
-          javap -classpath classes.jar androidx.media3.ui.danmaku.DanmakuPlayerViewController 2>&1 | grep -c "post" || echo "0"
-
-      - name: Verify aar freshness
-        run: |
-          set -uo pipefail
-          echo "=== aar 时间戳 ==="
-          find media/libraries -path "*/outputs/aar/*.aar" -type f -printf "%TH:%TM:%TS %p\n" 2>/dev/null | sort | head -20
-
-      - name: Collect aars
-        run: |
-          mkdir -p out
-          # media3 的 lib-mpvplayer / lib-decoder-ffmpeg 模块输岀名会和 native aar 撞名，
-          # 统一加 media3- 前缀避免覆盖（TV 用 fileTree 引入，名字无所谓）
-          find media/libraries -path "*/outputs/aar/*.aar" -type f | while read -r f; do
-            base=$(basename "$f")
-            # mpvplayer / decoder-ffmpeg：classes 用上游刚编的（含全部补丁），
-            # native 用本仓库 aar 里的（unified），合并成最终 aar。
-            case "$base" in
-              lib-mpvplayer-release.aar|lib-decoder-ffmpeg-release.aar)
-                SELF_AAR="self/app/libs/$base"
-                if [ ! -f "$SELF_AAR" ]; then
-                  echo "  ! 本仓库缺少 $base，直接采用上游产物"
-                  cp "$f" "out/$base"
-                  continue
-                fi
-                TMP=$(mktemp -d)
-                mkdir -p "$TMP/merged"
-                unzip -q -o "$f" -d "$TMP/merged"
-                unzip -q -o "$SELF_AAR" 'jni/*' -d "$TMP/native" 2>/dev/null || true
-                if [ -d "$TMP/native/jni" ]; then
-                  rm -rf "$TMP/merged/jni"
-                  cp -r "$TMP/native/jni" "$TMP/merged/jni"
-                  NATIVE_FILES=$(find "$TMP/native/jni" -type f | wc -l)
-                  echo "  = $base: 上游 classes + 本仓库 $NATIVE_FILES 个 native 文件"
-                else
-                  echo "  ! $base: 本仓库 aar 里没有 jni/，只用上游产物"
-                fi
-                ( cd "$TMP/merged" && zip -qr "$OLDPWD/out/$base" . )
-                rm -rf "$TMP"
-                continue ;;
-            esac
-            cp "$f" "out/$base"
-          done
-          echo "=== 收集到的 aar ==="
-          ls -lh out/
-          COUNT=$(ls -1 out/*.aar 2>/dev/null | wc -l)
-          echo "共 $COUNT 个 aar" | tee -a "$GITHUB_STEP_SUMMARY"
-          # 关键扩展包必须存在
-          # mpvplayer 由本仓库维护，不参与上游产物校验
-          for must in danmaku; do
-            if ! ls out/*"$must"*.aar >/dev/null 2>&1; then
-              echo "::error::缺少 $must 的 aar —— 检查 media_ref 是否用了 release-1.11.0-fongmi 分支"
-              exit 1
-            fi
-          done
-          if [ "$COUNT" -lt 11 ]; then
-            echo "::error::只收集到 $COUNT 个 aar，少于预期的 12 个，检查模块名"
-            exit 1
-          done
-
-      - name: Prepare aar directory (inside self repo)
-        run: |
-          # 当前目录：self/（仓库根）
           mkdir -p media_aars
-          # 把 out 下所有 aar 复制进 media_aars
-          AAR_FILES=(out/*.aar)
-          if [[ -f "${AAR_FILES[0]}" ]]; then
-            cp out/*.aar media_aars/
-            echo "✅ 已复制 aar 到 ./media_aars"
-            ls -lh media_aars/
+          if [ -f "move.txt" ]; then
+           echo "✅ 检测到 move.txt，开始按列表收集"
+            echo "=== move.txt 内容 ==="
+            cat move.txt
+            echo "======================"
+      
+            while IFS= read -r aar_name || [ -n "$aar_name" ]; do
+              # 去除首尾空白、换行、\r 回车符（解决Windows换行）
+              aar_name=$(echo "$aar_name" | tr -d '\r' | xargs)
+              if [ -z "$aar_name" ]; then
+                echo "⏭ 跳过空行"
+                continue
+              fi
+              echo "🔍 正在查找文件：$aar_name"
+              # 先打印找到的文件路径，确认是否匹配到
+              find ./libraries -name "$aar_name" -type f
+              # 复制文件
+              find ./libraries -name "$aar_name" -type f -exec cp {} media_aars/ \;
+            done < move.txt
           else
-            echo "::error::out 目录没有 aar 文件，无法复制到 media_aars"
-            exit 1
+            echo "未找到 move.txt，递归复制 libraries 下所有AAR文件（不限层级）"
+            find ./libraries -name "*.aar" -type f -exec cp {} media_aars/ \;
           fi
+          # 收集完成后列出所有复制过来的aar文件
+          echo "===== 已收集的AAR文件列表 ====="
+          ls media_aars/
 
-      - name: Commit media_aars changes (run inside self repo)
-        working-directory: self
+          # ========== 新增：复制 media_aars 到工作根目录 ${GITHUB_WORKSPACE} ==========
+          echo "📤 将 media_aars 目录复制到 ${GITHUB_WORKSPACE}"
+          cp -r media_aars "${GITHUB_WORKSPACE}/"
+      - name: 提交media_aars变更到仓库
+        working-directory: ${{ github.workspace }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      
           git add media_aars/
           # 判断是否有变更
           if git diff --cached --quiet; then
@@ -237,11 +174,43 @@ jobs:
             git push
           fi
 
-      - name: Upload aars
-        uses: actions/upload-artifact@v4
+      # 复制 AAR 到 ok-tv 仓库
+      - name: 复制并推送到远程仓库${{inputs.update_branch}}分支
+        if: ${{ inputs.copy_to_oktv == true }}
+        run: |
+          cd ..
+          git clone -b ${{inputs.update_branch}} https://cyh92:${{ secrets.MY_GITEE_TOKEN }}@gitee.com/cyh92/ok-tv.git ok-tv-repo
+          cd ok-tv-repo
+          
+          # 复制AAR
+          cp -f ${{ github.workspace }}/media_aars/*.aar app/libs/
+          
+          # 配置Git
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          
+          # 提交变更
+          git add -f app/libs/*.aar
+          git commit -m "Auto update Media3 AARs (${{ steps.date.outputs.datetime }})"
+          
+          # 推送到远程${{inputs.update_branch}}分支
+          git push origin ${{inputs.update_branch}}
+          
+          echo "✅ AAR复制 + 提交 + 推送全部完成！"
+
+      # 打包 ZIP
+      - name: Zip all AARs
+        run: |
+          cd media_aars
+          zip -q -r Media3-AARs.zip *.aar
+          mv Media3-AARs.zip ../
+
+      # 创建 Release 并上传
+      - name: Create Release and Upload All
+        uses: softprops/action-gh-release@v2
         with:
-          name: media3-aars
-          path: self/out/*.aar
-          if-no-files-found: error
-          retention-days: 90
-      
+          tag_name: build-Media3-${{ steps.date.outputs.datetime }}
+          name: Release AAR Media3-${{ steps.date.outputs.datetime }}
+          files: |
+            Media3-AARs.zip
+            media_aars/*.aar
