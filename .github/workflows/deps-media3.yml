@@ -2,6 +2,25 @@ name: 编译定制media3-aar
 
 on:
   workflow_dispatch:
+    inputs:
+      repo_source:
+          description: 代码仓库来源
+          type: choice
+          options:
+            - GitHub
+            - Gitee
+          required: true
+          default: GitHub
+      target_branch:
+        description: '输入要编译的分支名'
+        required: true
+        default: 'release-1.11.0-fongmi'
+        type: string
+      update_branch:
+        description: '输入源仓库分支'
+        required: true
+        default: 'fm-new'
+        type: string
 
 permissions:
   contents: write
@@ -16,15 +35,22 @@ jobs:
         with:
           persist-credentials: true
           
-      - name: 检出定制分支源码（FongMi/media 上游 release-1.11.0-fongmi）
+      - name: 检出定制分支源码
+        if: inputs.repo_source == 'GitHub'
         uses: actions/checkout@v4
         with:
           repository: FongMi/media
-          ref: release-1.11.0-fongmi
+          ref: ${{ inputs.target_branch }}
           fetch-depth: 1
           path: media
           submodules: true
 
+      - name: Clone Gitee 代码
+        if: inputs.repo_source == 'Gitee'
+        run: |
+          # 清空当前目录，避免 git clone . 报错目录非空
+          rm -rf ./*
+          git clone -b ${{ inputs.target_branch }} --depth 1 https://cyh92:${{ secrets.MY_GITEE_TOKEN }}@gitee.com/cyh92/media.git media
       - name: 安装 JDK 21
         uses: actions/setup-java@v4
         with:
