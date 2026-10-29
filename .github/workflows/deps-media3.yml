@@ -54,7 +54,7 @@ jobs:
       - name: 动态发现全部 lib-* 模块并编译 release aar（含定制 mpvplayer/ui_danmaku/leanback/ffmpeg）
         working-directory: ./media
         run: |
-          ls
+          ls ${GITHUB_WORKSPACE}
           chmod +x gradlew
           PROJECTS=$(./gradlew --no-daemon -q projects 2>/dev/null | grep -oP "Project ':\K[^']+" | grep '^lib-' | sed 's/$/:assembleRelease/' | tr '\n' ' ')
           echo "待编译模块: $PROJECTS"
@@ -75,13 +75,8 @@ jobs:
           if [ "$COUNT" -lt 10 ]; then echo "::error::aar 数量过少（<$COUNT），编译可能不完整"; exit 1; fi
 
           DEST="${GITHUB_WORKSPACE}/media_aars"
-          if [ -d "${DEST}" ]; then
-              # 清空目录（包含隐藏文件）
-              rm -rf "${DEST:?}"/* "${DEST:?}/".[!.]*
-          else
-              mkdir -p "${DEST}"
-          fi
-          cp -r /tmp/aar-out/* "${DEST}/"
+          mkdir -p "${DEST}"
+          rsync -av --delete /tmp/aar-out/ "${DEST}/"  
       - name: 提交media_aars变更到仓库
         working-directory: ${{ github.workspace }}
         run: |
