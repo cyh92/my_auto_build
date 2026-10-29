@@ -63,7 +63,7 @@ jobs:
           if [ -z "$PROJECTS" ]; then echo "::error::未发现任何 lib-* 模块，源码分支可能不对"; exit 1; fi
           ./gradlew --no-daemon -Dorg.gradle.jvmargs=-Xmx5g --stacktrace $PROJECTS
 
-      - name: 收集 aar 并推送到 libs 分支（Shaqudabao/media）
+      - name: 收集 aar 
         working-directory: ./media
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
