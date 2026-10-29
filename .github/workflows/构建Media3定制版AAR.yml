@@ -91,7 +91,9 @@ jobs:
           echo "待编译模块: $PROJECTS"
           if [ -z "$PROJECTS" ]; then echo "::error::未发现任何 lib-* 模块，源码分支可能不对"; exit 1; fi
           ./gradlew --no-daemon -Dorg.gradle.jvmargs=-Xmx5g --stacktrace $PROJECTS
-
+      - name: Get current date
+        id: date
+        run: echo "datetime=$(date +%Y%m%d%H%M%S%3N)" >> $GITHUB_OUTPUT
       - name: 收集 aar 
         working-directory: ./media
         env:
@@ -123,3 +125,19 @@ jobs:
             git commit -m "🤖 自动更新收集的AAR包 media_aars"
             git push
           fi
+        # 打包 ZIP
+      - name: Zip all AARs
+        run: |
+          cd media_aars
+          zip -q -r Media3-aars.zip *.aar
+          mv Media3-aars.zip ../
+
+      # 创建 Release 并上传
+      - name: Create Release and Upload All
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.date.outputs.datetime }}
+          name: Media3-${{ steps.date.outputs.datetime }}
+          files: |
+            Media3-aar.zip
+            media_aars/*.aar
