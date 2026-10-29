@@ -1,5 +1,4 @@
-name: 编译定制media3-aar
-
+name: 构建Media3定制版AAR
 on:
   workflow_dispatch:
     inputs:
