@@ -48,6 +48,7 @@ jobs:
 
       - name: 动态发现全部 lib-* 模块并编译 release aar（含定制 mpvplayer/ui_danmaku/leanback/ffmpeg）
         run: |
+          ls
           chmod +x gradlew
           PROJECTS=$(./gradlew --no-daemon -q projects 2>/dev/null | grep -oP "Project ':\K[^']+" | grep '^lib-' | sed 's/$/:assembleRelease/' | tr '\n' ' ')
           echo "待编译模块: $PROJECTS"
