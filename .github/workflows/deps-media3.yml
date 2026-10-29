@@ -2,8 +2,6 @@ name: 编译定制media3-aar
 
 on:
   workflow_dispatch:
-  push:
-    branches: [release]
 
 permissions:
   contents: write
