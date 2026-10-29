@@ -126,18 +126,18 @@ jobs:
             git push
           fi
         # 打包 ZIP
-      - name: Zip all AARs
+      - name: 打包并压缩aars
         run: |
           cd media_aars
           zip -q -r Media3-aars.zip *.aar
           mv Media3-aars.zip ../
 
       # 创建 Release 并上传
-      - name: Create Release and Upload All
+      - name: 建 Release 并上传
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.date.outputs.datetime }}
           name: Media3-${{ steps.date.outputs.datetime }}
           files: |
-            Media3-aar.zip
+            Media3-aars.zip
             media_aars/*.aar
