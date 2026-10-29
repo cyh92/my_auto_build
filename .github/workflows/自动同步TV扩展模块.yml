@@ -143,6 +143,13 @@ jobs:
             exit 1
           fi
 
+          # 预处理：获取源 body，如果为空则填入默认文本（防止 Gitee 报 400 必填校验错误）
+          GH_NAME="${{ steps.gh_release.outputs.name }}"
+          GH_BODY="${{ steps.gh_release.outputs.body }}"
+          if [ -z "$(echo "$GH_BODY" | tr -d '[:space:]')" ]; then
+            GH_BODY="自动同步自 GitHub 源仓库。"
+          fi
+
           # 2. 创建或更新 Release
           if [ "$NEED_CREATE" = "true" ]; then
             # --- 2.1 创建 Release ---
@@ -154,8 +161,8 @@ jobs:
           {
             "access_token": "$MY_GITEE_TOKEN",
             "tag_name": "$TAG",
-            "name": "${{ steps.gh_release.outputs.name }}",
-            "body": $(echo '${{ steps.gh_release.outputs.body }}' | jq -Rs .),
+            "name": "$GH_NAME",
+            "body": $(echo "$GH_BODY" | jq -Rs .),
             "target_commitish": "$TARGET"
           }
           EOF
@@ -167,7 +174,7 @@ jobs:
             RID=$(echo "$CBODY" | jq -r '.id // empty' 2>/dev/null || true)
             echo "Created release id=$RID"
           else
-            # --- 2.2 更新 Release (同步最新的 name 和 body) ---
+            # --- 2.2 更新 Release (按文档要求补齐 id, tag_name, name, body) ---
             echo "Updating Gitee release metadata (name & body)..."
             UTMP=$(mktemp)
             UCODE=$(curl -s -o "$UTMP" -w "%{http_code}" -X PATCH "$BASE/releases/$RID" \
@@ -175,13 +182,16 @@ jobs:
               -d @- <<EOF
           {
             "access_token": "$MY_GITEE_TOKEN",
-            "name": "${{ steps.gh_release.outputs.name }}",
-            "body": $(echo '${{ steps.gh_release.outputs.body }}' | jq -Rs .)
+            "id": $RID,
+            "tag_name": "$TAG",
+            "name": "$GH_NAME",
+            "body": $(echo "$GH_BODY" | jq -Rs .)
           }
           EOF
             )
             if [ "$UCODE" != "200" ]; then
               echo "::warning::Failed to update Gitee release metadata (HTTP $UCODE)"
+              echo "Error detail: $(cat "$UTMP")"
             else
               echo "Successfully updated Gitee release metadata."
             fi
