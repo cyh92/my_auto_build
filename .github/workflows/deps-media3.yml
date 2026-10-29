@@ -13,12 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
+      - name: Checkout 当前主仓库代码
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          
       - name: 检出定制分支源码（FongMi/media 上游 release-1.11.0-fongmi）
         uses: actions/checkout@v4
         with:
           repository: FongMi/media
           ref: release-1.11.0-fongmi
           fetch-depth: 1
+          path: media
+          submodules: true
 
       - name: 安装 JDK 21
         uses: actions/setup-java@v4
@@ -47,6 +54,7 @@ jobs:
           fi
 
       - name: 动态发现全部 lib-* 模块并编译 release aar（含定制 mpvplayer/ui_danmaku/leanback/ffmpeg）
+        working-directory: ./media
         run: |
           ls
           chmod +x gradlew
@@ -56,6 +64,7 @@ jobs:
           ./gradlew --no-daemon -Dorg.gradle.jvmargs=-Xmx5g --stacktrace $PROJECTS
 
       - name: 收集 aar 并推送到 libs 分支（Shaqudabao/media）
+        working-directory: ./media
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
