@@ -372,3 +372,20 @@ jobs:
           files: artifacts/legado-${{ needs.prepare.outputs.versionL }}*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # ========== 清理旧release：保留最近 5 个，超过就删最老 ==========
+      - name: Cleanup old releases
+        env:
+          KEEP_LATEST: 5
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 列出release，按发布时间新→旧排序，取从第KEEP_LATEST之后的
+          TO_DELETE=$(gh release list --json tagName,publishedAt -q '
+            sort_by(.publishedAt) | reverse | .[$KEEP_LATEST:] | map(.tagName) | join("\n")
+          ')
+          echo "$TO_DELETE"
+          if [ -n "$TO_DELETE" ]; then
+            echo "$TO_DELETE" | while read -r TAG; do
+              echo "Deleting release: $TAG"
+              gh release delete "$TAG" -y
+            done
+          fi
