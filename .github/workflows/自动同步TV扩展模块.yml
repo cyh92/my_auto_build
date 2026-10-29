@@ -105,7 +105,8 @@ jobs:
 
       # 关键：先确保 Gitee Release 存在并拿到 release_id，同时删除同名旧附件
       # 因为 module 是滚动 Release，action 的 upload_asset 只追加不覆盖
-      - name: Prepare Gitee Release (ensure exists + delete ALL old assets)
+      # 核心步骤：查询/创建/更新 Release，并清理所有旧附件
+      - name: Prepare Gitee Release (ensure exists + update metadata + delete ALL old assets)
         id: prepare
         env:
           MY_GITEE_TOKEN: ${{ secrets.MY_GITEE_TOKEN }}
@@ -118,38 +119,34 @@ jobs:
 
           echo "Query: $BASE/releases/tags/$TAG"
 
-          # 1. 查询 Release 是否存在（HTTP 状态码与 body 分离）
+          # 1. 查询 Release 是否存在
           TMP=$(mktemp)
           CODE=$(curl -s -o "$TMP" -w "%{http_code}" \
             "$BASE/releases/tags/$TAG?access_token=$MY_GITEE_TOKEN")
           BODY=$(cat "$TMP")
           echo "HTTP $CODE"
-          echo "Body preview:"
-          head -c 500 "$TMP"; echo
 
           NEED_CREATE=false
           RID=""
 
           if [ "$CODE" = "200" ]; then
-            # Gitee 对不存在的 tag 可能返回 200 + null，需视为不存在
             RID=$(echo "$BODY" | jq -r '.id // empty' 2>/dev/null || true)
             if [ -z "$RID" ] || [ "$RID" = "null" ]; then
-              echo "HTTP 200 but body is null -> treat as not found"
               NEED_CREATE=true
             else
               echo "Gitee release exists, id=$RID"
             fi
           elif [ "$CODE" = "404" ]; then
-            echo "HTTP 404 -> not found"
             NEED_CREATE=true
           else
             echo "::error::Unexpected HTTP $CODE when querying Gitee release"
             exit 1
           fi
 
-          # 2. 不存在则创建 Release
+          # 2. 创建或更新 Release
           if [ "$NEED_CREATE" = "true" ]; then
-            echo "Creating Gitee release '$TAG' (target_commitish=$TARGET)"
+            # --- 2.1 创建 Release ---
+            echo "Creating Gitee release '$TAG'..."
             CTMP=$(mktemp)
             CCODE=$(curl -s -o "$CTMP" -w "%{http_code}" -X POST "$BASE/releases" \
               -H "Content-Type: application/json" \
@@ -164,49 +161,46 @@ jobs:
           EOF
             )
             CBODY=$(cat "$CTMP")
-            echo "Create HTTP $CCODE"
-            echo "Create body preview:"
-            head -c 500 "$CTMP"; echo
-
             if [ "$CCODE" != "201" ] && [ "$CCODE" != "200" ]; then
-              echo "::error::Failed to create Gitee release (HTTP $CCODE)"
-              exit 1
+              echo "::error::Failed to create Gitee release (HTTP $CCODE)"; echo "$CBODY"; exit 1
             fi
-
             RID=$(echo "$CBODY" | jq -r '.id // empty' 2>/dev/null || true)
-            if [ -z "$RID" ] || [ "$RID" = "null" ]; then
-              echo "::error::Create response has no valid id"
-              exit 1
-            fi
             echo "Created release id=$RID"
+          else
+            # --- 2.2 更新 Release (同步最新的 name 和 body) ---
+            echo "Updating Gitee release metadata (name & body)..."
+            UTMP=$(mktemp)
+            UCODE=$(curl -s -o "$UTMP" -w "%{http_code}" -X PATCH "$BASE/releases/$RID" \
+              -H "Content-Type: application/json" \
+              -d @- <<EOF
+          {
+            "access_token": "$MY_GITEE_TOKEN",
+            "name": "${{ steps.gh_release.outputs.name }}",
+            "body": $(echo '${{ steps.gh_release.outputs.body }}' | jq -Rs .)
+          }
+          EOF
+            )
+            if [ "$UCODE" != "200" ]; then
+              echo "::warning::Failed to update Gitee release metadata (HTTP $UCODE)"
+            else
+              echo "Successfully updated Gitee release metadata."
+            fi
           fi
 
           echo "release_id=$RID" >> "$GITHUB_OUTPUT"
 
-          # 3. 获取并删除该 Release 下的【所有】旧附件
+          # 3. 清理全部旧附件
           echo "Fetching all existing attachments..."
           ETMP=$(mktemp)
-          curl -s -o "$ETMP" \
-            "$BASE/releases/$RID/attach_files?access_token=$MY_GITEE_TOKEN"
+          curl -s -o "$ETMP" "$BASE/releases/$RID/attach_files?access_token=$MY_GITEE_TOKEN"
           EXISTING=$(cat "$ETMP")
-
-          # 使用 jq 提取所有附件的 id
-          # 注意：Gitee 的 attach_files 接口默认可能带有分页限制，若附件极多需额外处理，但一般几十个没问题
           ALL_IDS=$(echo "$EXISTING" | jq -r '.[]?.id' 2>/dev/null || true)
 
-          if [ -z "$ALL_IDS" ]; then
-            echo "No existing attachments found (or not json)."
-          else
-            echo "Found existing attachment IDs to delete:"
-            echo "$ALL_IDS"
-            
-            # 遍历所有提取到的 ID 并执行删除
+          if [ -n "$ALL_IDS" ]; then
             for OLD_ID in $ALL_IDS; do
               if [ -n "$OLD_ID" ] && [ "$OLD_ID" != "null" ]; then
                 echo "Deleting attachment id=$OLD_ID"
-                curl -s -X DELETE \
-                  "$BASE/releases/$RID/attach_files/$OLD_ID?access_token=$MY_GITEE_TOKEN" \
-                  >/dev/null
+                curl -s -X DELETE "$BASE/releases/$RID/attach_files/$OLD_ID?access_token=$MY_GITEE_TOKEN" >/dev/null
               fi
             done
             echo "All old attachments deleted."
