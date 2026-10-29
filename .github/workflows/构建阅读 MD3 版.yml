@@ -375,7 +375,7 @@ jobs:
     # ========== 清理旧release：保留最近 5 个，超过就删最老 ==========
       - name: Cleanup old releases
         env:
-          KEEP_LATEST: 5
+          KEEP_LATEST: 3
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 列出release，按发布时间新→旧排序，取从第KEEP_LATEST之后的
