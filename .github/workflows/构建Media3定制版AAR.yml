@@ -8,6 +8,7 @@ on:
           options:
             - GitHub
             - Gitee
+            - 自定义地址
           required: true
           default: GitHub
       target_branch:
@@ -15,11 +16,10 @@ on:
         required: true
         default: 'release-1.11.0-fongmi'
         type: string
-      update_branch:
-        description: '输入源仓库分支'
-        required: true
-        default: 'fm-new'
-        type: string
+      custom_url:
+          description: '自定义仓库地址（仅当上面选择「自定义地址」时生效）'
+          required: false
+          type: string
 
 permissions:
   contents: write
@@ -50,6 +50,12 @@ jobs:
           # 清空当前目录，避免 git clone . 报错目录非空
           rm -rf ./*
           git clone -b ${{ inputs.target_branch }} --depth 1 https://cyh92:${{ secrets.MY_GITEE_TOKEN }}@gitee.com/cyh92/media.git media
+      - name: 克隆自定义仓库代码
+        if: inputs.repo_source == '自定义地址'
+        run: |
+          # 清空当前目录，避免 git clone . 报错目录非空
+          rm -rf ./*
+          git clone -b ${{ inputs.target_branch }} --depth 1 ${{ inputs.custom_url }} media
       - name: 安装 JDK 21
         uses: actions/setup-java@v4
         with:
