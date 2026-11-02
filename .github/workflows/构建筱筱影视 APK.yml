@@ -1,11 +1,13 @@
 name: 构建筱筱影视 APK
 on:
+  schedule:
+    - cron: '0 15 * * 2'
   workflow_dispatch:
     inputs:
         add_suffix:
           description: '是否追加包名后缀（.cyh）'
           required: true
-          default: false
+          default: true
           type: boolean  # 这就是复选框！
         url:
           description: '请输入仓库地址'
@@ -13,8 +15,8 @@ on:
           default: 'https://gitee.com/cyh92/ok-tv.git'  
           type: choice
           options:
-          - https://gitee.com/cyh92/ok-tv.git
           - https://github.com/cyh92/ok-tv.git
+          - https://gitee.com/cyh92/ok-tv.git
           - https://github.com/qfeng3168/TV.git
           - 自定义地址
         custom_url:
@@ -29,7 +31,7 @@ on:
           description: '是否同步发布到 Gitee Release'
           required: false
           type: boolean
-          default: false
+          default: true
 run-name: 构建筱筱影视 ${{ github.event.inputs.branch }}
 
 jobs:
