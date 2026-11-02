@@ -12,7 +12,7 @@ on:
         url:
           description: '请输入仓库地址'
           required: true
-          default: 'https://gitee.com/cyh92/ok-tv.git'  
+          default: 'https://github.com/cyh92/ok-tv.git'  
           type: choice
           options:
           - https://github.com/cyh92/ok-tv.git
