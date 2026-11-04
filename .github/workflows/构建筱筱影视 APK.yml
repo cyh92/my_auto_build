@@ -1,7 +1,7 @@
 name: 构建筱筱影视 APK
 on:
   schedule:
-    - cron: '50 21 * * 2'
+    - cron: '10 15 * * 2'
   workflow_dispatch:
     inputs:
         add_suffix:
