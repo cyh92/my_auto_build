@@ -1,7 +1,7 @@
 name: 构建筱筱影视 APK
 on:
   schedule:
-    - cron: '0 15 * * 2'
+    - cron: '50 21 * * 2'
   workflow_dispatch:
     inputs:
         add_suffix:
@@ -39,14 +39,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      # schedule 时 inputs 为空，用 || 回退到默认值
+      REPO_URL: ${{ github.event.inputs.url || 'https://github.com/cyh92/ok-tv.git' }}
+      CUSTOM_URL: ${{ github.event.inputs.custom_url || '' }}
+      BRANCH: ${{ github.event.inputs.branch || 'fm-new' }}
+      ADD_SUFFIX: ${{ github.event.inputs.add_suffix || 'true' }}
 
     steps:
-      # 新增：解析最终仓库地址
       - name: 解析仓库地址
         id: parse_repo
         run: |
-          selected_url="${{ inputs.url }}"
-          custom_input="${{ inputs.custom_url }}"
+          selected_url="$REPO_URL"
+          custom_input="$CUSTOM_URL"
           if [[ "$selected_url" == "自定义地址" ]]; then
             if [[ -z "$custom_input" ]]; then
               echo "ERROR: 选择「自定义地址」时，必须在下方填写完整仓库URL！"
@@ -67,9 +72,9 @@ jobs:
       - name: 清理旧ok-tv目录
         run: rm -rf ./ok-tv
         
-      - name: 克隆 Gitee ok-tv 代码 (${{ github.event.inputs.branch }} 分支)
+      - name: 克隆 Gitee ok-tv 代码 (${{ env.BRANCH }} 分支)
         run: |
-          git clone --depth 1 -b ${{ github.event.inputs.branch }} ${{ steps.parse_repo.outputs.final_url }} ok-tv
+          git clone --depth 1 -b "$BRANCH" ${{ steps.parse_repo.outputs.final_url }} ok-tv
 
       # 2. 设置 JDK 17
       - name: 设置 JDK 21
@@ -136,7 +141,7 @@ jobs:
          # ==========【新增 gradle clean】==========
          ./gradlew clean
          
-          if [[ "${{ inputs.add_suffix }}" == "true" ]]; then
+          if [[ "$ADD_SUFFIX" == "true" ]]; then
           sed -i '/buildTypes/,/^}/ { /release {/,/}/ s/}/        applicationIdSuffix ".cyh"\n}/ }' app/build.gradle
           fi
           cat app/build.gradle
@@ -172,7 +177,7 @@ jobs:
           ✅ 手动编译完成
           📦 版本号：v${{ steps.version.outputs.version_name }}
           🔐 已使用 fm-tv.jks 签名
-          🌿 分支：${{ github.event.inputs.branch }}
+          🌿 分支：${{ env.BRANCH }}
           MY_DELIMITER
           MARKER
       # 5. 上传（从 apks 目录读取，100% 成功）
@@ -183,7 +188,7 @@ jobs:
            # 👇 这里用 steps.version.outputs.version_name，无警告！
           name: |
             筱筱影视 v${{ steps.version.outputs.version_name }} 
-            手动构建版-${{ steps.time.outputs.datetime }} ${{ inputs.add_suffix && '✅ 已加后缀' || '❌ 无后缀' }}
+            手动构建版-${{ steps.time.outputs.datetime }} ${{ env.ADD_SUFFIX == 'true' && '✅ 已加后缀' || '❌ 无后缀' }}
           body: ${{ steps.make_release_body.outputs.body }}
           files: ${{ steps.apk.outputs.files }}
         env:
@@ -202,9 +207,9 @@ jobs:
           gitee_tag_name: v${{ steps.version.outputs.version_name }}-${{ steps.time.outputs.datetime }}
           gitee_release_name: |
             筱筱影视 v${{ steps.version.outputs.version_name }} 
-            手动构建版-${{ steps.time.outputs.datetime }} ${{ inputs.add_suffix && '✅ 已加后缀' || '❌ 无后缀' }}
+            手动构建版-${{ steps.time.outputs.datetime }} ${{ env.ADD_SUFFIX == 'true' && '✅ 已加后缀' || '❌ 无后缀' }}
           gitee_release_body: ${{ steps.make_release_body.outputs.body }}
-          gitee_target_commitish: ${{ github.event.inputs.branch }}
+          gitee_target_commitish: ${{ env.BRANCH }}
       
       - name: Upload Additional Assets Using Release ID
         if: success() && github.event.inputs.publishGitee == 'xxxx'
