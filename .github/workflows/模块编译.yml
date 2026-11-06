@@ -1,0 +1,539 @@
+name: 构建 Runtime 模块
+
+on:
+  schedule:
+    - cron: '40 15 * * 2'
+  workflow_dispatch:
+    inputs:
+      url:
+        description: '请输入仓库地址'
+        required: true
+        default: 'https://github.com/cyh92/ok-tv.git'
+        type: choice
+        options:
+          - https://github.com/cyh92/ok-tv.git
+          - https://gitee.com/cyh92/ok-tv.git
+          - 自定义地址
+      custom_url:
+        description: '自定义仓库地址（仅当上面选择「自定义地址」时生效）'
+        required: false
+        type: string
+      branch:
+        description: '请输入要编译的分支名'
+        required: true
+        default: 'fongmi'
+      libs_aar:
+        description: 'Media aars 目录'
+        required: false
+        type: string
+        default: 'media_libs'
+      modules:
+        description: '要构建的模块，逗号分隔（quickjs,nodejs,thunder,mpv,python,bdj）'
+        required: false
+        default: 'quickjs,nodejs,thunder,mpv,python'
+        type: string
+      version_code:
+        description: 'versionCode，留空则自动取上游 catalog 的版本号 +1'
+        required: false
+        default: ''
+        type: string
+      version_name:
+        description: 'versionName，留空则自动取上游 catalog 的版本号 +1'
+        required: false
+        default: ''
+        type: string
+      release_tag:
+        description: '产物发布到的 release tag'
+        required: false
+        default: 'module-local'
+        type: string
+      bdj_runtime_url:
+        description: 'bdj 专用：j2re-zero-<abi>.zip 的压缩包地址，解压后需含 j2re-zero-arm64-v8a.zip 与 j2re-zero-armeabi-v7a.zip；留空则跳过 bdj'
+        required: false
+        default: ''
+        type: string
+      publishGitee:
+        description: '是否同步发布到 Gitee Release'
+        required: false
+        default: true
+        type: boolean
+
+run-name: 构建 Runtime ${{ github.event.inputs.branch }}
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: ${{ github.event.inputs.url || 'https://github.com/cyh92/ok-tv.git' }}
+  CUSTOM_URL: ${{ github.event.inputs.custom_url || '' }}
+  BRANCH: ${{ github.event.inputs.branch || 'fongmi' }}
+  LIBS_AAR_DIR: ${{ github.event.inputs.libs_aar || 'media_libs' }}
+  MODULES: ${{ github.event.inputs.modules || 'quickjs,nodejs,thunder,mpv,python' }}
+  VERSION_CODE: ${{ github.event.inputs.version_code || '' }}
+  VERSION_NAME: ${{ github.event.inputs.version_name || '' }}
+  RELEASE_TAG: ${{ github.event.inputs.release_tag || 'module-local' }}
+  BDJ_URL: ${{ github.event.inputs.bdj_runtime_url || '' }}
+  UPSTREAM_CATALOG: 'https://github.com/FongMi/Release/releases/download/module/catalog.json'
+
+jobs:
+  # ------------------------------------------------------------------ 准备
+  prepare:
+    name: 准备环境
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.plan.outputs.modules }}
+      version_code: ${{ steps.plan.outputs.version_code }}
+      version_name: ${{ steps.plan.outputs.version_name }}
+    steps:
+      # 1. 检出【本 workflow 所在仓库】—— 签名、media_libs、脚本都在这里
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
+
+      - name: 解析仓库地址
+        id: parse_repo
+        run: |
+          set -euo pipefail
+          selected_url="$REPO_URL"
+          custom_input="$CUSTOM_URL"
+          if [[ "$selected_url" == "自定义地址" ]]; then
+            if [[ -z "$custom_input" ]]; then
+              echo "::error::选择「自定义地址」时，必须填写完整仓库URL！"
+              exit 1
+            fi
+            final_url="$custom_input"
+          else
+            final_url="$selected_url"
+          fi
+          echo "final_url=$final_url" >> $GITHUB_OUTPUT
+          echo "最终使用仓库: $final_url"
+
+      - name: 清理旧 ok-tv 目录
+        run: rm -rf ./ok-tv
+
+      # 2. 克隆目标分支的代码
+      - name: 克隆代码仓库 (${{ env.BRANCH }} 分支)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 -b "$BRANCH" "${{ steps.parse_repo.outputs.final_url }}" ok-tv
+          echo "✅ 已克隆 ${{ steps.parse_repo.outputs.final_url }} @ $BRANCH"
+
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: 设置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 设置 Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-37 build-tools;37.0.0'
+
+      - name: 安装 patchelf
+        run: sudo apt-get update && sudo apt-get install -y patchelf
+
+      # 3. 复制签名 & Media aars
+      #    runtime/build.gradle 用 appDirectory.file(storeFile) 解析签名路径，
+      #    相对 app/ 目录 → keystore 放到 app/fm-tv.jks，local.properties 写 fm-tv.jks
+      - name: 复制签名与依赖
+        run: |
+          set -euo pipefail
+          cp -f sign/fm-tv.jks ok-tv/app/fm-tv.jks
+          SRC_AAR_DIR="${GITHUB_WORKSPACE}/${LIBS_AAR_DIR}"
+          TARGET_LIBS="${GITHUB_WORKSPACE}/ok-tv/app/libs"
+          echo "源目录: ${SRC_AAR_DIR}"
+          echo "目标目录: ${TARGET_LIBS}"
+          mkdir -p "${TARGET_LIBS}"
+          if [ -d "${SRC_AAR_DIR}" ]; then
+            cp -f "${SRC_AAR_DIR}"/*.aar "${TARGET_LIBS}/"
+            echo "✅ aar 复制完成："
+            ls -la "${TARGET_LIBS}/"
+          else
+            echo "::warning::未找到 ${SRC_AAR_DIR}，沿用仓库内已有的 app/libs"
+          fi
+          # clone 下来的 app/libs 只有 git 跟踪的 hook/tvbus，其余全靠 media_libs 补齐
+          MISSING=""
+          for AAR in lib-common-release lib-container-release lib-database-release \
+                    lib-datasource-release lib-datasource-okhttp-release lib-decoder-release \
+                    lib-decoder-ffmpeg-release lib-effect-release lib-exoplayer-release \
+                    lib-exoplayer-dash-release lib-exoplayer-hls-release lib-exoplayer-rtsp-release \
+                    lib-extractor-release lib-mpvplayer-release lib-session-release \
+                    lib-ui-release lib-ui-danmaku-release; do
+            [ -f "${TARGET_LIBS}/${AAR}.aar" ] || MISSING="${MISSING} ${AAR}.aar"
+          done
+          if [ -n "${MISSING}" ]; then
+            echo "::error::缺少必需的 aar：${MISSING}"
+            echo "::error::请确认 ${LIBS_AAR_DIR} 目录包含完整的 media aars"
+            exit 1
+          fi
+          echo "✅ 必需的 aar 齐全"
+
+      # 4. 写 local.properties（sdk.dir 由 ANDROID_HOME 提供，无需写入）
+      - name: 配置签名
+        working-directory: ./ok-tv
+        run: |
+          set -euo pipefail
+          cat > local.properties << EOF
+          storeFile=fm-tv.jks
+          keyAlias=${{ secrets.RUNTIME_KEY_ALIAS || 'key0' }}
+          storePassword=${{ secrets.RUNTIME_STORE_PASSWORD || '123456' }}
+          keyPassword=${{ secrets.RUNTIME_KEY_PASSWORD || '123456' }}
+          openid=${{ secrets.OPENID }}
+          gitee_token=${{ secrets.MY_GITEE_TOKEN }}
+          EOF
+          cat local.properties
+          # runtime 与 chaquo/runtime 是独立 Gradle 工程，AGP 需要各自的 local.properties
+          # （sdk.dir 由 ANDROID_HOME 提供，这里显式写一份更稳）
+          for SUB in runtime chaquo/runtime; do
+            printf 'sdk.dir=%s\n' "${ANDROID_HOME}" > "${SUB}/local.properties"
+          done
+          echo "✅ 已写入 runtime/local.properties 与 chaquo/runtime/local.properties"
+
+      # 5. 版本号：默认取上游 catalog 最高 versionCode +1
+      - name: 计算版本号
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          requested = [m.strip() for m in os.environ.get("MODULES", "").split(",") if m.strip()]
+          catalog = None
+          try:
+              with urllib.request.urlopen(os.environ["UPSTREAM_CATALOG"], timeout=30) as r:
+                  catalog = json.load(r)
+          except Exception as e:
+              print(f"::warning::无法读取上游 catalog: {e}")
+
+          versions = {}
+          if catalog:
+              for m in catalog.get("modules", []):
+                  versions[m["id"]] = (int(m["versionCode"]), str(m["versionName"]))
+
+          code = os.environ.get("VERSION_CODE", "").strip()
+          name = os.environ.get("VERSION_NAME", "").strip()
+          if not code:
+              code = str(max([v[0] for v in versions.values()] + [0]) + 1)
+          if not name:
+              base = max(versions.values(), key=lambda v: v[0])[1] if versions else "1.0.0"
+              parts = base.split(".")
+              try:
+                  parts[-1] = str(int(parts[-1]) + 1)
+              except ValueError:
+                  parts.append("1")
+              name = ".".join(parts)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"modules={','.join(requested)}\n")
+              out.write(f"version_code={code}\n")
+              out.write(f"version_name={name}\n")
+          print(f"✅ modules={requested} versionCode={code} versionName={name}")
+          PY
+
+      # 6. python 引擎的 wheels / pure-wheels / native-bundles（gitignored，从 FongMi/python-android 拉取）
+      - name: 同步 python 运行时资源
+        working-directory: ./ok-tv
+        run: python3 scripts/sync_python_runtime.py
+
+      # 7. python 模块依赖 chaquo/runtime 独立工程产出的 aar，必须先构建
+      - name: 构建 chaquo runtime aar
+        working-directory: ./ok-tv/chaquo/runtime
+        run: ../../gradlew assembleArm64Release assembleArm32Release --console=plain
+
+      - name: 上传 python 运行时资源
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-assets
+          path: |
+            ok-tv/chaquo/runtime/build/outputs/aar
+            ok-tv/chaquo/runtime/wheels
+            ok-tv/chaquo/runtime/pure-wheels
+            ok-tv/chaquo/runtime/native-bundles
+          retention-days: 1
+          if-no-files-found: warn
+
+  # ------------------------------------------------------------------ 构建各模块
+  build:
+    name: 构建 ${{ matrix.module }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: quickjs
+            prop: tvQuickJs
+          - module: nodejs
+            prop: tvNodeJs
+          - module: thunder
+            prop: tvThunder
+          - module: mpv
+            prop: tvMpv
+          - module: python
+            prop: tvPython
+          - module: bdj
+            prop: tvBdj
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析仓库地址
+        id: parse_repo
+        run: |
+          set -euo pipefail
+          selected_url="$REPO_URL"
+          custom_input="$CUSTOM_URL"
+          if [[ "$selected_url" == "自定义地址" ]]; then
+            final_url="$custom_input"
+          else
+            final_url="$selected_url"
+          fi
+          echo "final_url=$final_url" >> $GITHUB_OUTPUT
+
+      - name: 清理旧 ok-tv 目录
+        run: rm -rf ./ok-tv
+
+      - name: 克隆代码仓库 (${{ env.BRANCH }} 分支)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 -b "$BRANCH" "${{ steps.parse_repo.outputs.final_url }}" ok-tv
+
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: 设置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 设置 Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-37 build-tools;37.0.0'
+
+      - name: 安装 patchelf
+        run: sudo apt-get update && sudo apt-get install -y patchelf
+
+      - name: 复制签名与依赖
+        run: |
+          set -euo pipefail
+          cp -f sign/fm-tv.jks ok-tv/app/fm-tv.jks
+          SRC_AAR_DIR="${GITHUB_WORKSPACE}/${LIBS_AAR_DIR}"
+          TARGET_LIBS="${GITHUB_WORKSPACE}/ok-tv/app/libs"
+          mkdir -p "${TARGET_LIBS}"
+          if [ -d "${SRC_AAR_DIR}" ]; then
+            cp -f "${SRC_AAR_DIR}"/*.aar "${TARGET_LIBS}/"
+          fi
+          MISSING=""
+          for AAR in lib-common-release lib-container-release lib-database-release \
+                    lib-datasource-release lib-datasource-okhttp-release lib-decoder-release \
+                    lib-decoder-ffmpeg-release lib-effect-release lib-exoplayer-release \
+                    lib-exoplayer-dash-release lib-exoplayer-hls-release lib-exoplayer-rtsp-release \
+                    lib-extractor-release lib-mpvplayer-release lib-session-release \
+                    lib-ui-release lib-ui-danmaku-release; do
+            [ -f "${TARGET_LIBS}/${AAR}.aar" ] || MISSING="${MISSING} ${AAR}.aar"
+          done
+          if [ -n "${MISSING}" ]; then
+            echo "::error::缺少必需的 aar：${MISSING}"
+            exit 1
+          fi
+          echo "✅ 必需的 aar 齐全"
+
+      - name: 配置签名
+        working-directory: ./ok-tv
+        run: |
+          set -euo pipefail
+          cat > local.properties << EOF
+          storeFile=fm-tv.jks
+          keyAlias=${{ secrets.RUNTIME_KEY_ALIAS || 'key0' }}
+          storePassword=${{ secrets.RUNTIME_STORE_PASSWORD || '123456' }}
+          keyPassword=${{ secrets.RUNTIME_KEY_PASSWORD || '123456' }}
+          openid=${{ secrets.OPENID }}
+          gitee_token=${{ secrets.MY_GITEE_TOKEN }}
+          EOF
+          for SUB in runtime chaquo/runtime; do
+            printf 'sdk.dir=%s\n' "${ANDROID_HOME}" > "${SUB}/local.properties"
+          done
+
+      - name: 下载 python 运行时资源
+        uses: actions/download-artifact@v4
+        with:
+          name: python-assets
+          path: ok-tv
+        continue-on-error: true
+
+      # bdj 的 j2re 运行时包不在仓库里，需外部提供
+      - name: 获取 bdj 运行时
+        if: matrix.module == 'bdj'
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/bdj"
+          if [ -n "$BDJ_URL" ]; then
+            curl -fsSL "$BDJ_URL" -o /tmp/bdj.zip
+            unzip -q /tmp/bdj.zip -d "${GITHUB_WORKSPACE}/bdj"
+          fi
+          ls -la "${GITHUB_WORKSPACE}/bdj"
+
+      - name: 构建 runtime
+        working-directory: ./ok-tv/runtime
+        env:
+          MODULE: ${{ matrix.module }}
+          PROP: ${{ matrix.prop }}
+        run: |
+          set -euo pipefail
+          EXTRA=""
+          if [ "${MODULE}" = "bdj" ]; then
+            if [ -z "$BDJ_URL" ]; then
+              echo "::error::bdj 需要 bdj_runtime_url 输入"
+              exit 1
+            fi
+            EXTRA="-PtvBdjRuntimeDirectory=${GITHUB_WORKSPACE}/bdj"
+          fi
+          ../gradlew assembleArm64Release assembleArm32Release \
+            -PtvRuntimeModule="${MODULE}" \
+            -P"${PROP}VersionCode=${{ needs.prepare.outputs.version_code }}" \
+            -P"${PROP}VersionName=${{ needs.prepare.outputs.version_name }}" \
+            ${EXTRA} \
+            --console=plain
+
+      - name: 收集产物
+        working-directory: ./ok-tv
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp runtime/build/${{ matrix.module }}/outputs/apk/arm64/release/runtime-${{ matrix.module }}-arm64_v8a.apk dist/ 2>/dev/null || true
+          cp runtime/build/${{ matrix.module }}/outputs/apk/arm32/release/runtime-${{ matrix.module }}-armeabi_v7a.apk dist/ 2>/dev/null || true
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.module }}
+          path: dist/*.apk
+          retention-days: 1
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ 生成 catalog 并发布
+  publish:
+    name: 生成 catalog 并发布
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析仓库地址
+        id: parse_repo
+        run: |
+          set -euo pipefail
+          selected_url="$REPO_URL"
+          custom_input="$CUSTOM_URL"
+          if [[ "$selected_url" == "自定义地址" ]]; then
+            final_url="$custom_input"
+          else
+            final_url="$selected_url"
+          fi
+          echo "final_url=$final_url" >> $GITHUB_OUTPUT
+
+      - name: 清理旧 ok-tv 目录
+        run: rm -rf ./ok-tv
+
+      - name: 克隆代码仓库 (${{ env.BRANCH }} 分支)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 -b "$BRANCH" "${{ steps.parse_repo.outputs.final_url }}" ok-tv
+
+      - name: 设置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 设置 Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-37 build-tools;37.0.0'
+
+      - name: 收集 APK
+        uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          path: dist
+          merge-multiple: true
+
+      - name: 列出 APK
+        run: ls -la dist
+
+      # runtime_catalog.py：校验每个 APK 的签名/ABI/载荷，生成 catalog.json，
+      # 并把 APK 重命名为 runtime-<module>-<version>-<abi>.apk
+      - name: 生成 catalog
+        working-directory: ./ok-tv
+        run: |
+          set -euo pipefail
+          AAPT2="$(ls -d "${ANDROID_HOME}"/build-tools/*/ | sort -V | tail -1)aapt2"
+          URL_BASE="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}"
+          python3 scripts/runtime_catalog.py "${GITHUB_WORKSPACE}/dist" \
+            --output "${GITHUB_WORKSPACE}/out" \
+            --aapt2 "${AAPT2}" \
+            --url-base "${URL_BASE}"
+          ls -la "${GITHUB_WORKSPACE}/out"
+
+      - name: 组装 Release 正文
+        id: body
+        run: |
+          set -euo pipefail
+          {
+            echo '✅ Runtime 模块构建完成'
+            echo "📦 版本：v${{ needs.prepare.outputs.version_name }}（code ${{ needs.prepare.outputs.version_code }}）"
+            echo "🌿 分支：${{ env.BRANCH }}"
+            echo "🔐 已使用 fm-tv.jks 签名（与 App 同签名）"
+            echo ''
+            echo '将 catalog.json 指向本 release 的资产目录即可让 App 发现这些模块：'
+            echo '构建 App 时加 -PtvRuntimeCatalog=<URL_BASE>/catalog.json'
+          } > body.md
+          cat body.md
+
+      - name: 发布到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Runtime ${{ needs.prepare.outputs.version_name }}
+          body: ${{ steps.body.outputs.body }}
+          files: |
+            out/catalog.json
+            out/*.apk
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建 Gitee Release
+        if: success() && github.event.inputs.publishGitee == 'true'
+        id: create_release
+        uses: nicennnnnnnlee/action-gitee-release@master
+        with:
+          gitee_action: create_release
+          gitee_owner: cyh92
+          gitee_repo: ok-tv
+          gitee_token: ${{ secrets.MY_GITEE_TOKEN }}
+          gitee_tag_name: ${{ env.RELEASE_TAG }}
+          gitee_release_name: Runtime ${{ needs.prepare.outputs.version_name }}
+          gitee_release_body: ${{ steps.body.outputs.body }}
+          gitee_target_commitish: ${{ env.BRANCH }}
+
+      - name: 上传 Gitee 附件
+        if: success() && github.event.inputs.publishGitee == 'true'
+        uses: nicennnnnnnlee/action-gitee-release@master
+        with:
+          gitee_action: upload_asset
+          gitee_owner: cyh92
+          gitee_repo: ok-tv
+          gitee_token: ${{ secrets.MY_GITEE_TOKEN }}
+          gitee_release_id: ${{ steps.create_release.outputs.release-id }}
+          gitee_files: |
+            out/catalog.json
+            out/*.apk
