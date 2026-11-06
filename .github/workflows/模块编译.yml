@@ -142,22 +142,13 @@ jobs:
       - name: 安装 SDK 平台与构建工具
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          SDKMANAGER="$(ls -d "${SDK_ROOT}"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1 || true)"
-          if [ -z "${SDKMANAGER}" ]; then
-            echo "::error::找不到 sdkmanager（SDK_ROOT=${SDK_ROOT}）"
-            exit 1
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973" > /dev/null 2>&1
+          if [ ! -d "$ANDROID_HOME/ndk/27.0.12077973" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.3.11579264" > /dev/null 2>&1 || true
           fi
-          echo "使用 sdkmanager: ${SDKMANAGER}"
-          yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses > /dev/null 2>&1 || true
-          "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" \
-            "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
-          echo "--- platforms ---"; ls "${SDK_ROOT}/platforms"
-          echo "--- build-tools ---"; ls "${SDK_ROOT}/build-tools"
-          # AGP 需要这两个目录，缺一不可
-          test -d "${SDK_ROOT}/platforms/android-37.0" || { echo "::error::缺少 platforms/android-37.0"; exit 1; }
-          test -d "${SDK_ROOT}/build-tools/37.0.0" || { echo "::error::缺少 build-tools/37.0.0"; exit 1; }
-
+          ls "$ANDROID_HOME/ndk" || true
       - name: 安装 patchelf
         run: sudo apt-get update && sudo apt-get install -y patchelf
 
