@@ -129,10 +129,34 @@ jobs:
         with:
           python-version: '3.10'
 
+      # ⚠ 关键：compileSdk=37 对应的平台包名是 platforms;android-37.0（带 .0 后缀）。
+      #   Google 仓库里没有 platforms;android-37 —— 写错会让 sdkmanager 报
+      #   "Warning: Failed to find package 'platforms;android-37'" 并以 exit code 1 失败。
+      #   这里 setup-android 只铺 cmdline-tools + platform-tools，平台与构建工具由下一步显式安装。
       - name: 设置 Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-37 build-tools;37.0.0'
+          accept-android-sdk-licenses: true
+          continue-on-error: true
+
+      - name: 安装 SDK 平台与构建工具
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(ls -d "${SDK_ROOT}"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "${SDKMANAGER}" ]; then
+            echo "::error::找不到 sdkmanager（SDK_ROOT=${SDK_ROOT}）"
+            exit 1
+          fi
+          echo "使用 sdkmanager: ${SDKMANAGER}"
+          yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses > /dev/null 2>&1 || true
+          "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" \
+            "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+          echo "--- platforms ---"; ls "${SDK_ROOT}/platforms"
+          echo "--- build-tools ---"; ls "${SDK_ROOT}/build-tools"
+          # AGP 需要这两个目录，缺一不可
+          test -d "${SDK_ROOT}/platforms/android-37.0" || { echo "::error::缺少 platforms/android-37.0"; exit 1; }
+          test -d "${SDK_ROOT}/build-tools/37.0.0" || { echo "::error::缺少 build-tools/37.0.0"; exit 1; }
 
       - name: 安装 patchelf
         run: sudo apt-get update && sudo apt-get install -y patchelf
@@ -314,10 +338,28 @@ jobs:
         with:
           python-version: '3.10'
 
+      # ⚠ 关键：compileSdk=37 对应的平台包名是 platforms;android-37.0（带 .0 后缀）
       - name: 设置 Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-37 build-tools;37.0.0'
+          accept-android-sdk-licenses: true
+          continue-on-error: true
+
+      - name: 安装 SDK 平台与构建工具
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(ls -d "${SDK_ROOT}"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "${SDKMANAGER}" ]; then
+            echo "::error::找不到 sdkmanager（SDK_ROOT=${SDK_ROOT}）"
+            exit 1
+          fi
+          echo "使用 sdkmanager: ${SDKMANAGER}"
+          yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses > /dev/null 2>&1 || true
+          "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" \
+            "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+          test -d "${SDK_ROOT}/platforms/android-37.0" || { echo "::error::缺少 platforms/android-37.0"; exit 1; }
+          test -d "${SDK_ROOT}/build-tools/37.0.0" || { echo "::error::缺少 build-tools/37.0.0"; exit 1; }
 
       - name: 安装 patchelf
         run: sudo apt-get update && sudo apt-get install -y patchelf
@@ -454,10 +496,29 @@ jobs:
         with:
           python-version: '3.10'
 
+      # ⚠ 关键：compileSdk=37 对应的平台包名是 platforms;android-37.0（带 .0 后缀）
       - name: 设置 Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-37 build-tools;37.0.0'
+          accept-android-sdk-licenses: true
+          continue-on-error: true
+
+      - name: 安装 SDK 平台与构建工具
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(ls -d "${SDK_ROOT}"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "${SDKMANAGER}" ]; then
+            echo "::error::找不到 sdkmanager（SDK_ROOT=${SDK_ROOT}）"
+            exit 1
+          fi
+          echo "使用 sdkmanager: ${SDKMANAGER}"
+          yes | "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" --licenses > /dev/null 2>&1 || true
+          "${SDKMANAGER}" --sdk_root="${SDK_ROOT}" \
+            "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+          test -d "${SDK_ROOT}/platforms/android-37.0" || { echo "::error::缺少 platforms/android-37.0"; exit 1; }
+          test -d "${SDK_ROOT}/build-tools/37.0.0" || { echo "::error::缺少 build-tools/37.0.0"; exit 1; }
+          echo "--- build-tools ---"; ls "${SDK_ROOT}/build-tools"
 
       - name: 收集 APK
         uses: actions/download-artifact@v4
@@ -475,7 +536,10 @@ jobs:
         working-directory: ./ok-tv
         run: |
           set -euo pipefail
-          AAPT2="$(ls -d "${ANDROID_HOME}"/build-tools/*/ | sort -V | tail -1)aapt2"
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          AAPT2="$(ls -d "${SDK_ROOT}"/build-tools/*/ | sort -V | tail -1)aapt2"
+          echo "aapt2: ${AAPT2}"
+          test -x "${AAPT2}" || { echo "::error::aapt2 不可执行：${AAPT2}"; exit 1; }
           URL_BASE="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}"
           python3 scripts/runtime_catalog.py "${GITHUB_WORKSPACE}/dist" \
             --output "${GITHUB_WORKSPACE}/out" \
