@@ -50,6 +50,7 @@ jobs:
       CUSTOM_URL: ${{ github.event.inputs.custom_url || '' }}
       BRANCH: ${{ github.event.inputs.branch || 'fm-new' }}
       ADD_SUFFIX: ${{ github.event.inputs.add_suffix || 'true' }}
+      LIBS_AAR_DIR: ${{ github.event.inputs.libs_aar || 'media_libs' }}
 
     steps:
       - name: 解析仓库地址
@@ -99,7 +100,7 @@ jobs:
         run: |    
           cp -f sign/fm-tv.jks ok-tv/app/fm-tv.jks
            # 定义路径，方便修改
-          SRC_AAR_DIR="${GITHUB_WORKSPACE}/${{ steps.parse_repo.outputs.libs_aar }}"
+          SRC_AAR_DIR="${GITHUB_WORKSPACE}/${LIBS_AAR_DIR}"
           # 这里 third_repo 是你actions/checkout拉第三方仓库指定的path名称
           TARGET_LIBS="${GITHUB_WORKSPACE}/ok-tv/app/libs"
         
