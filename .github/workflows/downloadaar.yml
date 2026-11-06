@@ -1,0 +1,167 @@
+# =============================================================================
+# 从 https://github.com/ricky0829/TV/releases/tag/aar 下载预编译 AAR，
+# 存放进本仓库的 media_libs/ 目录，供 app/build.gradle 以 flatDir 方式引用。
+#
+# 放置位置：
+#   GitHub Actions -> 本仓库 .github/workflows/sync-media-libs-aar.yml
+#   Gitea  Actions -> 本仓库 .gitea/workflows/sync-media-libs-aar.yml
+#
+# 平台差异只有两处，已在下方用 [GITHUB] / [GITEA] 标注：
+#   1) runs-on 的 runner 标签
+#   2) 用于 push 回仓库的 secrets 名称
+# =============================================================================
+name: Sync Media3 AARs
+
+on:
+  # 手动触发，可勾选是否把下载结果提交回本仓库
+  workflow_dispatch:
+    inputs:
+      push_back:
+        description: "下载后把 media_libs/ 提交并推回本仓库"
+        required: false
+        default: "false"
+      aar_tag:
+        description: "上游 Release tag（默认 aar）"
+        required: false
+        default: "aar"  
+
+env:
+  AAR_REPO: "ricky0829/TV"
+  AAR_TAG: "aar"
+  AAR_DIR: "media_libs"
+  # 失败重试次数（GitHub 下载偶发 502/限流）
+  CURL_RETRY: "3"
+
+jobs:
+  fetch-aar:
+    # [GITHUB] runs-on: ubuntu-latest
+    # [GITEA]  runs-on: ubuntu-latest   （若自建 runner 用自定义标签，改成对应标签）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ---------------------------------------------------------------- 1. 检出
+      - name: Checkout
+        # [GITHUB] uses: actions/checkout@v4
+        # [GITEA]  uses: actions/checkout@v4     （Gitea 1.20+ 同样支持）
+        uses: actions/checkout@v4
+        with:
+          # 需要 push 回仓库时才取完整历史，否则浅克隆更快
+          fetch-depth: 1
+
+      # --------------------------------------------------- 2. 解析上游 AAR 列表
+      - name: Resolve AAR list from upstream release
+        id: resolve
+        env:
+          TAG_INPUT: ${{ inputs.aar_tag }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_INPUT:-$AAR_TAG}"
+          echo "上游目标：https://github.com/${AAR_REPO}/releases/tag/${TAG}"
+
+          # 用 release 资产页（expanded_assets）自动发现文件，上游新增 AAR 时无需改脚本
+          PAGE="https://github.com/${AAR_REPO}/releases/expanded_assets/${TAG}"
+          curl -fsSL --retry "$CURL_RETRY" --retry-delay 3 -A "Mozilla/5.0" "$PAGE" \
+            | grep -oE "/${AAR_REPO}/releases/download/${TAG}/[A-Za-z0-9._-]+\.aar" \
+            | sort -u > /tmp/aar_paths.txt || true
+
+          COUNT=$(wc -l < /tmp/aar_paths.txt | tr -d ' ')
+          echo "发现 AAR 数量：${COUNT}"
+          cat /tmp/aar_paths.txt
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::无法从 https://github.com/${AAR_REPO}/releases/tag/${TAG} 解析出任何 .aar，请确认 Release 是否存在或网络是否可达。"
+            exit 1
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------- 3. 下载到 media_libs
+      - name: Download AARs into ${{ env.AAR_DIR }}
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$AAR_DIR"
+
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            f="$(basename "$p")"
+            url="https://github.com${p}"
+            echo "==> 下载 $url"
+            if ! curl -fL --retry "$CURL_RETRY" --retry-delay 3 --retry-all-errors \
+                 -A "Mozilla/5.0" -o "${AAR_DIR}/${f}.part" "$url"; then
+              # 兜底：curl 失败时用 gh（有 GH_PAT 才可用）
+              echo "curl 失败，尝试 gh release download 兜底"
+              gh release download "$TAG" --repo "$AAR_REPO" --pattern "$f" \
+                 --dir "$AAR_DIR" --clobber
+              rm -f "${AAR_DIR}/${f}.part"
+              continue
+            fi
+            mv -f "${AAR_DIR}/${f}.part" "${AAR_DIR}/${f}"
+          done < /tmp/aar_paths.txt
+
+          # 校验：非空 + 是合法 zip(AAR 本质是 zip)
+          echo "=== 完整性校验 ==="
+          BAD=0
+          for f in "$AAR_DIR"/*.aar; do
+            [ -e "$f" ] || continue
+            if [ ! -s "$f" ]; then
+              echo "::error::${f} 大小为 0"; BAD=1; continue
+            fi
+            if ! unzip -tq "$f" > /dev/null 2>&1; then
+              echo "::error::${f} 不是合法 AAR/zip"; BAD=1; continue
+            fi
+            printf '%-40s %10s\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+          done
+          [ "$BAD" -eq 0 ] || { echo "::error::存在损坏的 AAR，中止"; exit 1; }
+
+          TOTAL=$(ls -1 "$AAR_DIR"/*.aar 2>/dev/null | wc -l | tr -d ' ')
+          echo "=== 完成：共 ${TOTAL} 个 AAR，总大小 $(du -sh "$AAR_DIR" | cut -f1) ==="
+
+          if [ "$TOTAL" -lt "${{ steps.resolve.outputs.count }}" ]; then
+            echo "::warning::期望 ${{ steps.resolve.outputs.count }} 个，实际 ${TOTAL} 个，请检查上面日志"
+          fi
+
+      # ------------------------------------------- 4. 可选：提交回本仓库(把体积入库)
+      - name: Commit media_libs back to repo
+        env:
+          PUSH_BACK: ${{ inputs.push_back }}
+          # [GITHUB] REPO_PUSH_TOKEN: ${{ secrets.GH_PAT }}
+          # [GITEA]  REPO_PUSH_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          REPO_PUSH_TOKEN: ${{ secrets.REPO_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          case "${PUSH_BACK:-false}" in
+            true|True|TRUE|1) ;;
+            *) echo "未勾选 push_back，跳过提交（本次仅在工作区下载，供同 job 内构建使用）"; exit 0 ;;
+          esac
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A "$AAR_DIR"
+          if git diff --cached --quiet; then
+            echo "media_libs 无变化，无需提交"
+            exit 0
+          fi
+
+          git commit -m "chore(media_libs): sync AARs from ${AAR_REPO}@${AAR_TAG} [skip ci]"
+
+          if [ -z "${REPO_PUSH_TOKEN:-}" ]; then
+            echo "::error::未配置 REPO_PUSH_TOKEN，无法推送。请添加具备 repo 写权限的 Token 到仓库 Secrets。"
+            exit 1
+          fi
+
+          # 按平台拼 push 地址（Gitea 与 GitHub 都用 token 方式即可）
+          REMOTE_URL="$(git remote get-url origin)"
+          case "$REMOTE_URL" in
+            *github.com*) HOST_URL="${REMOTE_URL/github.com/${REPO_PUSH_TOKEN}@github.com}" ;;
+            *)            HOST_URL="$(echo "$REMOTE_URL" | sed -E "s#^https://([^@/]+@)?#https://${REPO_PUSH_TOKEN}@#")" ;;
+          esac
+          git push "$HOST_URL" "HEAD:${GITHUB_REF_NAME:-fm-new}" || {
+            echo "::error::推送失败，请检查 Token 权限（需 repo 读写）"; exit 1;
+          }
+          echo "已推送 media_libs 到本仓库"
+
