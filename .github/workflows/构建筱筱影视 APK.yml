@@ -27,6 +27,11 @@ on:
           description: '请输入要编译的分支名'
           required: true
           default: 'fm-new'
+        libs_aar:
+          description: 'Media aars 目录'
+          required: false
+          type: string
+          default: 'media_libs'
         publishGitee:
           description: '是否同步发布到 Gitee Release'
           required: false
@@ -94,7 +99,7 @@ jobs:
         run: |    
           cp -f sign/fm-tv.jks ok-tv/app/fm-tv.jks
            # 定义路径，方便修改
-          SRC_AAR_DIR="${GITHUB_WORKSPACE}/media_aars"
+          SRC_AAR_DIR="${GITHUB_WORKSPACE}/${{ steps.parse_repo.outputs.libs_aar }}"
           # 这里 third_repo 是你actions/checkout拉第三方仓库指定的path名称
           TARGET_LIBS="${GITHUB_WORKSPACE}/ok-tv/app/libs"
         
