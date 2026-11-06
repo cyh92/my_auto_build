@@ -123,7 +123,9 @@ jobs:
           if [ "$TOTAL" -lt "${{ steps.resolve.outputs.count }}" ]; then
             echo "::warning::期望 ${{ steps.resolve.outputs.count }} 个，实际 ${TOTAL} 个，请检查上面日志"
           fi
-
+          # 删除包含 tvbus、hook 的 aar
+          rm -f media_libs/*tvbus*.aar media_libs/*hook*.aar
+          ls -l media_libs
       # ------------------------------------------- 4. 可选：提交回本仓库(把体积入库)
       - name: 提交media_libs变更到仓库
         working-directory: ${{ github.workspace }}
