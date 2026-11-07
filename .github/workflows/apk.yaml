@@ -1,0 +1,128 @@
+name: Build 4 APKs (Matrix)
+
+on:
+  workflow_dispatch:
+    inputs:
+        url:
+          description: '请输入仓库地址'
+          required: true
+          default: 'https://github.com/cyh92/ok-tv.git'  
+          type: choice
+          options:
+          - https://github.com/cyh92/ok-tv.git
+          - https://gitee.com/cyh92/ok-tv.git
+          - https://github.com/qfeng3168/TV.git
+         branch:
+          description: '请输入要编译的分支名'
+          required: true
+          default: 'fm-new'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: Mobile
+            abi: Arm64_v8a
+            artifact_name: mobile-arm64-v8a
+          - flavor: Mobile
+            abi: Armeabi_v7a
+            artifact_name: mobile-armeabi-v7a
+          - flavor: Leanback
+            abi: Arm64_v8a
+            artifact_name: leanback-arm64-v8a
+          - flavor: Leanback
+            abi: Armeabi_v7a
+            artifact_name: leanback-armeabi-v7a
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: 克隆 ok-tv 代码 (${{ env.BRANCH }} 分支)
+        run: |
+          git clone --depth 1 -b ${{ github.event.inputs.branch ${{ github.event.inputs.url }} ok-tv
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 复制签名&依赖
+        run: |    
+          cp -f sign/fm-tv.jks ok-tv/app/fm-tv.jks
+           # 定义路径，方便修改
+          SRC_AAR_DIR="${GITHUB_WORKSPACE}/media_libs"
+          # 这里 third_repo 是你actions/checkout拉第三方仓库指定的path名称
+          TARGET_LIBS="${GITHUB_WORKSPACE}/ok-tv/app/libs"
+        
+          echo "源目录: ${SRC_AAR_DIR}"
+          echo "目标目录: ${TARGET_LIBS}"
+        
+          # 先创建目标文件夹，不存在自动新建
+          mkdir -p "${TARGET_LIBS}"
+        
+          # 复制所有 .aar 文件
+          cp -f "${SRC_AAR_DIR}"/*.aar "${TARGET_LIBS}/"
+        
+          echo "✅ 复制完成，目标目录文件列表："
+          ls -la "${TARGET_LIBS}/"
+      - name: 配置 APK 签名（终极修复版）
+        working-directory: ./ok-tv
+        run: |
+          # 1. 全新覆盖创建 local.properties
+          cat > local.properties << EOF
+          storeFile=fm-tv.jks
+          keyAlias=key0
+          storePassword=123456
+          keyPassword=123456
+          openid=${{ secrets.OPENID }}
+          gitee_token=${{ secrets.MY_GITEE_TOKEN }}
+          EOF
+          cat local.properties
+          
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Grant execute permission
+        working-directory: ./ok-tv
+        run: chmod +x gradlew
+
+      - name: Build ${{ matrix.artifact_name }}
+        working-directory: ./ok-tv
+        run: |
+          ./gradlew :app:assemble${{ matrix.flavor }}${{ matrix.abi }}Release \
+            -PfastRelease=true \
+            --no-daemon
+
+      - name: Find APK
+        working-directory: ./ok-tv
+        id: find_apk
+        run: |
+          APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ No APK found for ${{ matrix.artifact_name }}"
+            exit 1
+          fi
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "✅ ${{ matrix.artifact_name }} -> $APK_PATH"
+
+      - name: Upload ${{ matrix.artifact_name }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fongmi-${{ matrix.artifact_name }}
+          path: ${{ steps.find_apk.outputs.apk_path }}
+          if-no-files-found: error
