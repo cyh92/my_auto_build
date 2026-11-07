@@ -24,12 +24,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - flavor: Mobile
-            abi: Arm64_v8a
-            artifact_name: mobile-arm64-v8a
-          - flavor: Mobile
-            abi: Armeabi_v7a
-            artifact_name: mobile-armeabi-v7a
+          # - flavor: Mobile
+          #   abi: Arm64_v8a
+          #   artifact_name: mobile-arm64-v8a
+          # - flavor: Mobile
+          #   abi: Armeabi_v7a
+          #   artifact_name: mobile-armeabi-v7a
           - flavor: Leanback
             abi: Arm64_v8a
             artifact_name: leanback-arm64-v8a
