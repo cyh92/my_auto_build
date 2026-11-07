@@ -41,9 +41,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         
-      - name: 克隆 ok-tv 代码 (${{ env.BRANCH }} 分支)
+      - name: 克隆 ok-tv 代码 (${{ github.event.inputs.branch}} 分支)
         run: |
-          git clone --depth 1 -b ${{ github.event.inputs.branch ${{ github.event.inputs.url }} ok-tv
+          git clone --depth 1 -b ${{ github.event.inputs.branch}} ${{ github.event.inputs.url }} ok-tv
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
