@@ -136,7 +136,7 @@ jobs:
             line=$(echo "$line" | xargs)
             [ -z "$line" ] && continue
             case "$line" in \#*) continue ;; esac
-            TEST_URL="${line}${TEST_TARGET}"
+            TEST_URL="${line}/${TEST_TARGET}"
             echo "testing: $TEST_URL"
             # -L 跟随302；speed_download = 平均下载速度(B/s)，测更准
             SPEED=$(curl -L -s -o /dev/null --max-time 8 -w "%{speed_download}" "$TEST_URL" || true)
