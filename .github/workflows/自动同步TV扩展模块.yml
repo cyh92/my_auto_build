@@ -108,7 +108,7 @@ jobs:
           ls -la ./release_assets/
 
           # 给 catalog.json 里所有url添加前缀
-          PREFIX=${{ github.event.inputs.proxy_url }}
+          PREFIX=${{ github.event.inputs.proxy_url }}/
           jq --arg prefix "$PREFIX" '.modules[].artifacts[].url |= $prefix + .' ./release_assets/catalog.json > ./release_assets/catalog.tmp && mv ./release_assets/catalog.tmp ./release_assets/catalog.json
           # 校验打印所有url
           jq -r '.modules[].artifacts[].url' ./release_assets/catalog.json
