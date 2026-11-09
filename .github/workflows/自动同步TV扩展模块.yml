@@ -25,10 +25,6 @@ on:
         description: 'Gitee 创建 Release 用的 target_commitish'
         required: false
         default: 'fongmi'
-      proxy_url:
-        description: 'Github代理加速地址'
-        required: true
-        default: 'https://ghfile.geekertao.top'
 
 env:
   DEFAULT_GITEE_OWNER: 'cyh92'
