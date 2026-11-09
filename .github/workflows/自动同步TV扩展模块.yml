@@ -154,8 +154,9 @@ jobs:
           echo "✅ 最快前缀: $BEST_PREFIX (${BEST_SPEED} B/s)"
       
           # ===== 3. 用最快前缀重写 catalog.json 里所有 url =====
-          jq --arg p "$BEST_PREFIX" '.modules[].artifacts[].url |= $p + .' "$CATALOG" \
-            > ./release_assets/catalog.tmp && mv ./release_assets/catalog.tmp "$CATALOG"
+          jq --arg p "$BEST_PREFIX" '.modules[].artifacts[].url |= $p + "/" + (ltrimstr("/"))' "$CATALOG" \
+            > "$ASSET_DIR/catalog.tmp" && mv "$ASSET_DIR/catalog.tmp" "$CATALOG"
+          
       
           echo "==== 修改后的 url ===="
           jq -r '.modules[].artifacts[].url' "$CATALOG"
