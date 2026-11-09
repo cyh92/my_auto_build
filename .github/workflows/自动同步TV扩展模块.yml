@@ -42,6 +42,11 @@ jobs:
       contents: read
 
     steps:
+      - name: Checkout 当前主仓库代码
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          
       - name: Upgrade gh (确保 release view/download 正常)
         run: |
           gh --version || true
