@@ -124,7 +124,7 @@ jobs:
           echo "测速目标: $TEST_TARGET"
       
           # ===== 2. 遍历 prefix.txt 测速，取下载速度最快的 =====
-          PREFIX_FILE="${{ github.workspace }}/prefix.txt"
+          PREFIX_FILE="${{ github.workspace }}/diy/prefix.txt"
           BEST_PREFIX=""
           BEST_SPEED=0
           while IFS= read -r line || [ -n "$line" ]; do
