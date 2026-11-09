@@ -101,17 +101,59 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # rm -rf ./release_assets && mkdir -p ./release_assets
+          # gh release download "${{ steps.resolve.outputs.gh_tag }}" \
+          #   --dir ./release_assets \
+          #   --repo "${{ steps.resolve.outputs.gh_repo }}"
+          # ls -la ./release_assets/
+
+          
+          set -euo pipefail
           rm -rf ./release_assets && mkdir -p ./release_assets
           gh release download "${{ steps.resolve.outputs.gh_tag }}" \
             --dir ./release_assets \
             --repo "${{ steps.resolve.outputs.gh_repo }}"
           ls -la ./release_assets/
-
-          # 给 catalog.json 里所有url添加前缀
-          PREFIX=${{ github.event.inputs.proxy_url }}/
-          jq --arg prefix "$PREFIX" '.modules[].artifacts[].url |= $prefix + .' ./release_assets/catalog.json > ./release_assets/catalog.tmp && mv ./release_assets/catalog.tmp ./release_assets/catalog.json
-          # 校验打印所有url
-          jq -r '.modules[].artifacts[].url' ./release_assets/catalog.json
+      
+          # ===== 1. 从 catalog.json 取第一个 artifact 的原始 url 作为测速目标 =====
+          CATALOG="./release_assets/catalog.json"
+          TEST_TARGET=$(jq -r '.modules[0].artifacts[0].url' "$CATALOG")
+          if [ -z "$TEST_TARGET" ] || [ "$TEST_TARGET" = "null" ]; then
+            echo "❌ catalog.json 中取不到测试链接，终止"; exit 1
+          fi
+          echo "测速目标: $TEST_TARGET"
+      
+          # ===== 2. 遍历 prefix.txt 测速，取下载速度最快的 =====
+          PREFIX_FILE="${{ github.workspace }}/prefix.txt"
+          BEST_PREFIX=""
+          BEST_SPEED=0
+          while IFS= read -r line || [ -n "$line" ]; do
+            line=$(echo "$line" | xargs)
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            TEST_URL="${line}${TEST_TARGET}"
+            echo "testing: $TEST_URL"
+            # -L 跟随302；speed_download = 平均下载速度(B/s)，测更准
+            SPEED=$(curl -L -s -o /dev/null --max-time 8 -w "%{speed_download}" "$TEST_URL" || true)
+            echo "  speed: ${SPEED} B/s"
+            if [[ "$SPEED" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk "BEGIN{exit !($SPEED > $BEST_SPEED)}"; then
+              BEST_SPEED="$SPEED"
+              BEST_PREFIX="$line"
+              echo "  -> new best: $BEST_PREFIX ($BEST_SPEED B/s)"
+            fi
+          done < "$PREFIX_FILE"
+      
+          if [ -z "$BEST_PREFIX" ]; then
+            echo "❌ 所有前缀均测速失败，终止"; exit 1
+          fi
+          echo "✅ 最快前缀: $BEST_PREFIX (${BEST_SPEED} B/s)"
+      
+          # ===== 3. 用最快前缀重写 catalog.json 里所有 url =====
+          jq --arg p "$BEST_PREFIX" '.modules[].artifacts[].url |= $p + .' "$CATALOG" \
+            > ./release_assets/catalog.tmp && mv ./release_assets/catalog.tmp "$CATALOG"
+      
+          echo "==== 修改后的 url ===="
+          jq -r '.modules[].artifacts[].url' "$CATALOG"
 
       # 关键：先确保 Gitee Release 存在并拿到 release_id，同时删除同名旧附件
       # 因为 module 是滚动 Release，action 的 upload_asset 只追加不覆盖
