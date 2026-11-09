@@ -106,13 +106,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # rm -rf ./release_assets && mkdir -p ./release_assets
-          # gh release download "${{ steps.resolve.outputs.gh_tag }}" \
-          #   --dir ./release_assets \
-          #   --repo "${{ steps.resolve.outputs.gh_repo }}"
-          # ls -la ./release_assets/
-
-          
           set -euo pipefail
           rm -rf ./release_assets && mkdir -p ./release_assets
           gh release download "${{ steps.resolve.outputs.gh_tag }}" \
@@ -120,8 +113,12 @@ jobs:
             --repo "${{ steps.resolve.outputs.gh_repo }}"
           ls -la ./release_assets/
       
+          # ===== 变量定义 =====
+          ASSET_DIR="./release_assets"
+          CATALOG="${ASSET_DIR}/catalog.json"
+          PREFIX_FILE="${{ github.workspace }}/diy/prefix.txt"
+      
           # ===== 1. 从 catalog.json 取第一个 artifact 的原始 url 作为测速目标 =====
-          CATALOG="./release_assets/catalog.json"
           TEST_TARGET=$(jq -r '.modules[0].artifacts[0].url' "$CATALOG")
           if [ -z "$TEST_TARGET" ] || [ "$TEST_TARGET" = "null" ]; then
             echo "❌ catalog.json 中取不到测试链接，终止"; exit 1
@@ -129,14 +126,14 @@ jobs:
           echo "测速目标: $TEST_TARGET"
       
           # ===== 2. 遍历 prefix.txt 测速，取下载速度最快的 =====
-          PREFIX_FILE="${{ github.workspace }}/diy/prefix.txt"
           BEST_PREFIX=""
           BEST_SPEED=0
           while IFS= read -r line || [ -n "$line" ]; do
             line=$(echo "$line" | xargs)
             [ -z "$line" ] && continue
             case "$line" in \#*) continue ;; esac
-            TEST_URL="${line}/${TEST_TARGET}"
+            # 测速链接也统一做斜杠归一，和最终拼接逻辑保持一致
+            TEST_URL="$(echo "$line" | sed 's/\/$//')/${TEST_TARGET}"
             echo "testing: $TEST_URL"
             # -L 跟随302；speed_download = 平均下载速度(B/s)，测更准
             SPEED=$(curl -L -s -o /dev/null --max-time 8 -w "%{speed_download}" "$TEST_URL" || true)
@@ -153,9 +150,12 @@ jobs:
           fi
           echo "✅ 最快前缀: $BEST_PREFIX (${BEST_SPEED} B/s)"
       
-          # ===== 3. 用最快前缀重写 catalog.json 里所有 url =====
-          jq --arg p "$BEST_PREFIX" '.modules[].artifacts[].url |= $p + "/" + (. | ltrimstr("/"))' "$CATALOG" \
-            > "$ASSET_DIR/catalog.tmp" && mv "$ASSET_DIR/catalog.tmp" "$CATALOG"
+          # ===== 3. jq 归一化斜杠：自动删掉前缀末尾/、原链接开头/，保证只会一个/ =====
+          jq --arg p "$BEST_PREFIX" '
+            .modules[].artifacts[].url |= (
+              ($p | rtrimstr("/")) + "/" + (. | ltrimstr("/"))
+            )
+          ' "$CATALOG" > "${ASSET_DIR}/catalog.tmp" && mv "${ASSET_DIR}/catalog.tmp" "$CATALOG"
       
           echo "==== 修改后的 url ===="
           jq -r '.modules[].artifacts[].url' "$CATALOG"
