@@ -1,4 +1,4 @@
-name: 自动同步TV扩展模块
+name: 同步影视运行时模块
 
 on:
   schedule:
