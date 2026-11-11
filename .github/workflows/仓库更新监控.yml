@@ -123,19 +123,20 @@ jobs:
 
       - name: 发送邮件通知
         if: steps.diff.outputs.has_update == 'true'
-        env:
-          MAIL_USERNAME: cyh92@139.com
-          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
-          MAIL_TO: cyh92@139.com
-          SMTP_HOST: smtp.139.com
-          SMTP_PORT: 465
-          ADDED: ${{ steps.diff.outputs.added_branches }}
-          REMOVED: ${{ steps.diff.outputs.removed_branches }}
-          CHANGED: ${{ steps.diff.outputs.changed_branches }}
-          NEW_DATA: ${{ steps.diff.outputs.new_data }}
-          TARGET_REPO: ${{ env.TARGET_REPO }}
-        run: |
-          python3 scripts/sendMail.py
+        uses: dawidd6/action-send-mail@v5
+        with:
+          server_address: smtp.139.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: 仓库通知 fongmi/media
+          to: cyh92@139.com
+          from: GitHub监控 <cyh92@139.com>
+          body: |
+            新增分支：${{ steps.diff.outputs.added_branches }}
+            删除分支：${{ steps.diff.outputs.removed_branches }}
+            变更分支：${{ steps.diff.outputs.changed_branches }}
 
 
       - name: 写入新快照
