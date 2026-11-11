@@ -1,4 +1,4 @@
-name: 仓库更新监控（快照存本仓库，修复401&httpcode捕获bug）
+name: 仓库更新监控
 run-name: 监控仓库变更
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
 
 env:
   # 目标仓库
-  TARGET_REPO: "fongmi/media"
+  TARGET_REPO: "cyh92/ok-tv"
   # 快照文件路径（当前仓库内）
   CHECK_FILE: .github/.repo-watch-check.json
   TMP_DIR: ./tmp-watch
