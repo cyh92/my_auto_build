@@ -123,7 +123,7 @@ jobs:
 
       - name: 发送邮件通知
         if: steps.diff.outputs.has_update == 'true'
-        uses: dawidd6/action-send-mail@v5
+        uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.139.com
           server_port: 465
