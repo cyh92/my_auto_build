@@ -76,35 +76,40 @@ jobs:
       - name: 对比分支 & commit，计算变更
         id: diff
         run: |
-          # 旧快照（容错：非法/空 → 空对象）
+          # 旧快照容错
           OLD_RAW=$(cat ${{ env.CHECK_FILE }} 2>/dev/null || echo '')
-          OLD_DATA=$(echo "$OLD_RAW" | jq -c 'if type == "object" then . else {"branches":{}} end' 2>/dev/null || echo '{"branches":{}}')
-          echo "旧快照：$OLD_DATA"
+          echo "$OLD_RAW" | jq -c 'if type == "object" then . else {"branches":{}} end' 2>/dev/null || echo '{"branches":{}}' > ${{ env.TMP_DIR }}/old_data.json
 
-          # 新分支哈希表 {分支名: sha}
-          NEW_BRANCH_OBJ=$(jq -c 'reduce .[] as $item ({}; .[$item.name] = ($item.commit?.sha // ""))' ${{ env.TMP_DIR }}/remote_branches.json)
-          echo "新分支哈希表：$NEW_BRANCH_OBJ"
+          # 生成新分支sha对象，写入文件，不再放进shell变量
+          jq -c 'reduce .[] as $item ({}; .[$item.name] = ($item.commit?.sha // ""))' ${{ env.TMP_DIR }}/remote_branches.json > ${{ env.TMP_DIR }}/new_branch_obj.json
 
-          # 单次 jq 完成三类差异 + 明细
-          RESULT=$(jq -n --argjson old "$OLD_DATA" --argjson new "$NEW_BRANCH_OBJ" '
-            ($old.branches // {}) as $ob
+          echo "新分支哈希表文件内容："
+          cat ${{ env.TMP_DIR }}/new_branch_obj.json
+
+          # 核心：--slurpfile 读取两个json文件，$old[0] $new[0]，完全避开shell变量传json
+          RESULT=$(jq -n \
+            --slurpfile old ${{ env.TMP_DIR }}/old_data.json \
+            --slurpfile new ${{ env.TMP_DIR }}/new_branch_obj.json \
+            '
+            ($old[0].branches // {}) as $ob
             | ($ob | keys) as $ok
-            | ($new | keys) as $nk
+            | ($new[0] | keys) as $nk
             | {
                 added:   (($nk - $ok) | join(" ")),
                 removed: (($ok - $nk) | join(" ")),
-                changed: ([ $ok[] | select($new[.] != null and $new[.] != "" and $ob[.] != $new[.]) ] | join(" ")),
-                detail:  ([ $ok[] | select($new[.] != null and $new[.] != "" and $ob[.] != $new[.])
-                            | "\(.): \($ob[.][0:7]) -> \($new[.][0:7])" ] | join("\n"))
-              }')
+                changed: ([ $ok[] | select($new[0][.] != null and $new[0][.] != "" and $ob[.] != $new[0][.]) ] | join(" "))
+              }
+            ')
 
           ADDED_BRANCHES=$(jq -r '.added' <<< "$RESULT")
           REMOVED_BRANCHES=$(jq -r '.removed' <<< "$RESULT")
           CHANGED_BRANCHES=$(jq -r '.changed' <<< "$RESULT")
-          CHANGE_DETAIL=$(jq -r '.detail' <<< "$RESULT")
 
-          # 生成新快照，直接落临时文件（不再走 output 回写）
-          jq -n --argjson br "$NEW_BRANCH_OBJ" --arg t "$(date -Iseconds)" '{branches:$br, last_run:$t}' > ${{ env.TMP_DIR }}/new_state.json
+          # 生成新快照写入临时文件
+          jq -n \
+            --slurpfile br ${{ env.TMP_DIR }}/new_branch_obj.json \
+            --arg t "$(date -Iseconds)" \
+            '{branches:$br[0], last_run:$t}' > ${{ env.TMP_DIR }}/new_state.json
 
           if [ -n "$ADDED_BRANCHES$REMOVED_BRANCHES$CHANGED_BRANCHES" ];then
             HAS_UPDATE=true
@@ -117,8 +122,8 @@ jobs:
           echo "changed_branches=$CHANGED_BRANCHES" >> $GITHUB_OUTPUT
           echo "has_update=$HAS_UPDATE" >> $GITHUB_OUTPUT
           {
-            echo "change_detail<<EOF"
-            echo "$CHANGE_DETAIL"
+            echo "new_data<<EOF"
+            cat ${{ env.TMP_DIR }}/new_state.json
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
