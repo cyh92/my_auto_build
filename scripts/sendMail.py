@@ -39,37 +39,36 @@ def main():
         subject_parts.append(f"删除 {len(removed)} 个分支")
     if changed:
         subject_parts.append(f"{len(changed)} 个分支代码更新")
-    subject = f"[仓库更新] {TARGET_REPO} " + "，".join(subject_parts)
+    subject = f"仓库变更通知 {TARGET_REPO} " + "，".join(subject_parts)
 
     def lines(names):
         if not names:
-            return "  无\n"
+            return "无\n"
         buf = ""
         for b in names:
             sha = branches.get(b, "")
             if sha:
-                buf += f"  - {b}  SHA:{sha[:8]}  https://github.com/{TARGET_REPO}/commit/{sha}\n"
+                buf += f"- {b} SHA:{sha[:8]}\n"
             else:
-                buf += f"  - {b}  https://github.com/{TARGET_REPO}/commits/{b}\n"
+                buf += f"- {b}\n"
         return buf
 
-    text = f"""仓库更新提醒：{TARGET_REPO}
+    text = f"""仓库：{TARGET_REPO}
 检测时间：{formatdate(localtime=True)}
 
-🆕 新增分支（{len(added)}）
+新增分支（{len(added)}）
 {lines(added)}
-📝 代码有更新（{len(changed)}）
+代码变更分支（{len(changed)}）
 {lines(changed)}
-🗑 已删除分支（{len(removed)}）
+删除分支（{len(removed)}）
 {lines(removed)}
 
-由 GitHub Actions 自动发送
-当前快照共 {len(branches)} 个分支
+当前跟踪分支总数：{len(branches)}
 """
 
     msg = MIMEText(text, "plain", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = formataddr(("ActionsNotify", MAIL_USERNAME))
+    msg["From"] = formataddr(("通知", MAIL_USERNAME))
     msg["To"] = MAIL_TO
     msg["Date"] = formatdate(localtime=True)
 
@@ -79,7 +78,8 @@ def main():
         server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
         server.starttls(context=ssl.create_default_context())
     server.login(MAIL_USERNAME, MAIL_PASSWORD)
-    server.sendmail(MAIL_USERNAME, MAIL_TO.split(","), msg.as_string())
+    # 重点：单个收件人传字符串，不要数组
+    server.sendmail(MAIL_USERNAME, MAIL_TO, msg.as_string())
     server.quit()
     print("✅ 邮件发送成功")
 
