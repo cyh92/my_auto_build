@@ -1,4 +1,4 @@
-name: 仓库更新监控（快照存本仓库，修复限流报错）
+name: 仓库更新监控（快照存本仓库，修复401&httpcode捕获bug）
 run-name: 监控仓库变更
 on:
   schedule:
@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
 
 env:
-  # 目标仓库 owner/repo
+  # 目标仓库
   TARGET_REPO: "fongmi/media"
-  # 快照文件路径（放在当前仓库内）
+  # 快照文件路径（当前仓库内）
   CHECK_FILE: .github/.repo-watch-check.json
   TMP_DIR: ./tmp-watch
 
@@ -16,7 +16,7 @@ jobs:
   check-repo-update:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 允许提交推送快照文件
+      contents: write
     steps:
       - name: 检出当前仓库
         uses: actions/checkout@v4
@@ -33,15 +33,25 @@ jobs:
             echo '{"branches":{},"last_run":""}' > ${{ env.CHECK_FILE }}
           fi
 
-      - name: 获取目标仓库分支列表（带状态码校验）
+      - name: 获取目标仓库分支列表（修复http状态捕获，公开仓库可选PAT）
         id: fetch_remote
         run: |
           mkdir -p ${{ env.TMP_DIR }}
           API_URL="https://api.github.com/repos/${{ env.TARGET_REPO }}/branches?per_page=100"
           echo "GET $API_URL"
-          # 保存响应体 + http状态码
-          HTTP_CODE=$(curl -s -w "%{http_code}" -H "Authorization: token ${{ secrets.WATCH_PAT }}" \
-            $API_URL > ${{ env.TMP_DIR }}/remote_branches.json; echo $?)
+
+          # 构造header：如果配置了WATCH_PAT才带上token
+          HEADER=""
+          if [ -n "${{ secrets.WATCH_PAT }}" ]; then
+            HEADER="-H Authorization: token ${{ secrets.WATCH_PAT }}"
+          fi
+
+          # 正确捕获http状态码（原来写法有管道覆盖bug）
+          curl -s -w "\n%{http_code}" $HEADER $API_URL > ${{ env.TMP_DIR }}/resp.tmp
+          # 分割：最后一行是http code，前面是响应体
+          HTTP_CODE=$(tail -n1 ${{ env.TMP_DIR }}/resp.tmp)
+          head -n -1 ${{ env.TMP_DIR }}/resp.tmp > ${{ env.TMP_DIR }}/remote_branches.json
+
           echo "HTTP_CODE=$HTTP_CODE"
           cat ${{ env.TMP_DIR }}/remote_branches.json
 
@@ -49,27 +59,21 @@ jobs:
             echo "❌ GitHub API 请求失败，http code: $HTTP_CODE"
             exit 1
           fi
-          # 校验是不是数组（防止返回message对象）
           IS_ARRAY=$(jq 'if type=="array" then 1 else 0 end' ${{ env.TMP_DIR }}/remote_branches.json)
           if [ "$IS_ARRAY" != "1" ];then
-            echo "❌ API 返回不是分支数组，大概率限流/权限错误"
+            echo "❌ API 返回不是分支数组，限流/权限错误"
             exit 1
           fi
 
       - name: 对比分支 & commit，计算变更
         id: diff
         run: |
-          # 读取旧快照
           OLD_DATA=$(cat ${{ env.CHECK_FILE }})
-          # 安全读取：commit?.sha 不存在时返回null，不报错
           NEW_BRANCH_OBJ=$(jq 'reduce .[] as $item ({}; .[$item.name] = ($item.commit?.sha // ""))' ${{ env.TMP_DIR }}/remote_branches.json)
           NEW_DATA=$(jq -n --argjson br "$NEW_BRANCH_OBJ" --arg time "$(date -Iseconds)" '{branches:$br, last_run:$time}')
 
-          # 新增分支：新存在、旧不存在
           ADDED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '$new | keys - ($old.branches | keys) | join(" ")' <<< "$OLD_DATA")
-          # 删除分支：旧存在、新不存在
           REMOVED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '$old.branches | keys - ($new | keys) | join(" ")' <<< "$NEW_BRANCH_OBJ")
-          # 分支两边都存在，sha不一致=代码变更
           CHANGED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '
             [
               ($old.branches | keys[]) as $k
@@ -97,7 +101,7 @@ jobs:
           echo "删除分支：${{ steps.diff.outputs.removed_branches }}"
           echo "代码变更分支：${{ steps.diff.outputs.changed_branches }}"
 
-      - name: 发送通知（企业微信，不需要就删掉）
+      - name: 发送通知（企业微信，不需要直接删掉）
         if: 1 == 'true'
         run: |
           curl -s -X POST ${{ secrets.WECOM_WEBHOOK }} \
