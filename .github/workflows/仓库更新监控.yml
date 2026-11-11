@@ -32,29 +32,24 @@ jobs:
           if [ ! -f ${{ env.CHECK_FILE }} ];then
             echo '{"branches":{},"last_run":""}' > ${{ env.CHECK_FILE }}
           fi
-
       - name: 获取目标仓库分支列表（修复http状态捕获，公开仓库可选PAT）
         id: fetch_remote
         run: |
           mkdir -p ${{ env.TMP_DIR }}
           API_URL="https://api.github.com/repos/${{ env.TARGET_REPO }}/branches?per_page=100"
           echo "GET $API_URL"
-
           # 构造header：如果配置了WATCH_PAT才带上token
           HEADER=""
           if [ -n "${{ secrets.WATCH_PAT }}" ]; then
             HEADER="-H Authorization: token ${{ secrets.WATCH_PAT }}"
           fi
-
           # 正确捕获http状态码（原来写法有管道覆盖bug）
           curl -s -w "\n%{http_code}" $HEADER $API_URL > ${{ env.TMP_DIR }}/resp.tmp
           # 分割：最后一行是http code，前面是响应体
           HTTP_CODE=$(tail -n1 ${{ env.TMP_DIR }}/resp.tmp)
           head -n -1 ${{ env.TMP_DIR }}/resp.tmp > ${{ env.TMP_DIR }}/remote_branches.json
-
           echo "HTTP_CODE=$HTTP_CODE"
           cat ${{ env.TMP_DIR }}/remote_branches.json
-
           if [ "$HTTP_CODE" -ne 200 ];then
             echo "❌ GitHub API 请求失败，http code: $HTTP_CODE"
             exit 1
@@ -64,30 +59,25 @@ jobs:
             echo "❌ API 返回不是分支数组，限流/权限错误"
             exit 1
           fi
-
       - name: 对比分支 & commit，计算变更（修复类型问题）
         id: diff
         run: |
           # 读取旧快照，校验json，失败兜底
           OLD_RAW=$(cat ${{ env.CHECK_FILE }})
           OLD_DATA=$(echo "$OLD_RAW" | jq 'if type == "object" then . else {"branches":{}} end' 2>/dev/null || echo '{"branches":{}}')
-
           # 生成新分支sha对象
           NEW_BRANCH_OBJ=$(jq 'reduce .[] as $item ({}; .[$item.name] = ($item.commit?.sha // ""))' ${{ env.TMP_DIR }}/remote_branches.json)
           NEW_DATA=$(jq -n --argjson br "$NEW_BRANCH_OBJ" --arg time "$(date -Iseconds)" '{branches:$br, last_run:$time}')
-
           # 新增分支
           ADDED_BRANCHES=$(jq -n \
             --argjson new "$NEW_BRANCH_OBJ" \
             --argjson old "$OLD_DATA" \
             '$new | keys - ($old.branches | keys) | join(" ")')
-
           # 删除分支
           REMOVED_BRANCHES=$(jq -n \
             --argjson new "$NEW_BRANCH_OBJ" \
             --argjson old "$OLD_DATA" \
             '$old.branches | keys - ($new | keys) | join(" ")')
-
           # commit变更分支
           CHANGED_BRANCHES=$(jq -n \
             --argjson new "$NEW_BRANCH_OBJ" \
@@ -96,14 +86,12 @@ jobs:
               ($old.branches | keys[]) as $k
               | select($new[$k] != null and $old.branches[$k] != $new[$k] and $new[$k] != "")
             ] | join(" ")')
-
           # 计算是否更新
           if [ -n "$ADDED_BRANCHES$REMOVED_BRANCHES$CHANGED_BRANCHES" ];then
             HAS_UPDATE=true
           else
             HAS_UPDATE=false
           fi
-
           # 全部输出到 GITHUB_OUTPUT
           echo "added_branches=$ADDED_BRANCHES" >> $GITHUB_OUTPUT
           echo "removed_branches=$REMOVED_BRANCHES" >> $GITHUB_OUTPUT
@@ -112,15 +100,12 @@ jobs:
           echo "new_data<<EOF" >> $GITHUB_OUTPUT
           echo "$NEW_DATA" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
-
       - name: 输出结果
         run: |
           echo "=====检测结果====="
           echo "新增分支：${{ steps.diff.outputs.added_branches }}"
           echo "删除分支：${{ steps.diff.outputs.removed_branches }}"
           echo "代码变更分支：${{ steps.diff.outputs.changed_branches }}"
-
       - name: 发送邮件通知
         if: steps.diff.outputs.has_update == 'true'
         uses: dawidd6/action-send-mail@v3
@@ -137,12 +122,9 @@ jobs:
             新增分支：${{ steps.diff.outputs.added_branches }}
             删除分支：${{ steps.diff.outputs.removed_branches }}
             变更分支：${{ steps.diff.outputs.changed_branches }}
-
-
       - name: 写入新快照
         run: |
           echo '${{ steps.diff.outputs.new_data }}' > ${{ env.CHECK_FILE }}
-
       - name: 提交推送快照
         run: |
           git config --global user.name "github-actions[bot]"
