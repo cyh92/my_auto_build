@@ -135,7 +135,7 @@ jobs:
           NEW_DATA: ${{ steps.diff.outputs.new_data }}
           TARGET_REPO: ${{ env.TARGET_REPO }}
         run: |
-          python3 script/sendMail.py
+          python3 scripts/sendMail.py
 
 
       - name: 写入新快照
