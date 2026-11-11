@@ -2,9 +2,10 @@ import os
 import json
 import ssl
 import smtplib
+import certifi
 from email.mime.text import MIMEText
 from email.header import Header
-from email.utils import formataddr, formatdate
+from email.utils import formatdate
 
 def main():
     MAIL_USERNAME = os.environ.get("MAIL_USERNAME", "")
@@ -30,58 +31,42 @@ def main():
     branches = snap.get("branches", {})
 
     if not MAIL_USERNAME or not MAIL_PASSWORD or not MAIL_TO:
-        raise SystemExit("❌ 邮件参数缺失")
+        raise SystemExit("参数缺失")
 
-    subject_parts = []
+    parts = []
     if added:
-        subject_parts.append(f"新增 {len(added)} 个分支")
+        parts.append(f"新增{len(added)}分支")
     if removed:
-        subject_parts.append(f"删除 {len(removed)} 个分支")
+        parts.append(f"删除{len(removed)}分支")
     if changed:
-        subject_parts.append(f"{len(changed)} 个分支代码更新")
-    subject = f"仓库变更通知 {TARGET_REPO} " + "，".join(subject_parts)
+        parts.append(f"{len(changed)}分支更新")
+    subject = f"仓库通知 {TARGET_REPO} {' '.join(parts)}"
 
-    def lines(names):
-        if not names:
-            return "无\n"
-        buf = ""
-        for b in names:
-            sha = branches.get(b, "")
-            if sha:
-                buf += f"- {b} SHA:{sha[:8]}\n"
-            else:
-                buf += f"- {b}\n"
-        return buf
+    buf = ""
+    if added:
+        buf += "新增：" + " ".join(added) + "\n"
+    if changed:
+        buf += "更新：" + " ".join(changed) + "\n"
+    if removed:
+        buf += "删除：" + " ".join(removed) + "\n"
+    buf += f"分支总数:{len(branches)}"
 
-    text = f"""仓库：{TARGET_REPO}
-检测时间：{formatdate(localtime=True)}
-
-新增分支（{len(added)}）
-{lines(added)}
-代码变更分支（{len(changed)}）
-{lines(changed)}
-删除分支（{len(removed)}）
-{lines(removed)}
-
-当前跟踪分支总数：{len(branches)}
-"""
-
-    msg = MIMEText(text, "plain", "utf-8")
+    msg = MIMEText(buf, "plain", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = formataddr(("通知", MAIL_USERNAME))
+    msg["From"] = MAIL_USERNAME
     msg["To"] = MAIL_TO
     msg["Date"] = formatdate(localtime=True)
 
+    context = ssl.create_default_context(cafile=certifi.where())
     if SMTP_PORT == 465:
-        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=30)
+        server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=30)
     else:
         server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
-        server.starttls(context=ssl.create_default_context())
+        server.starttls(context=context)
     server.login(MAIL_USERNAME, MAIL_PASSWORD)
-    # 重点：单个收件人传字符串，不要数组
     server.sendmail(MAIL_USERNAME, MAIL_TO, msg.as_string())
     server.quit()
-    print("✅ 邮件发送成功")
+    print("✅ 发送成功")
 
 if __name__ == "__main__":
     main()
