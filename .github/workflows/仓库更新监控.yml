@@ -68,36 +68,41 @@ jobs:
       - name: 对比分支 & commit，计算变更（修复类型问题）
         id: diff
         run: |
-          # 读取上一次的快照，不存在则初始化为空对象
-          OLD_STATE="{}"
-          if [ -f ${{ env.CHECK_FILE }} ]; then
-            OLD_STATE=$(cat ${{ env.CHECK_FILE }})
-          fi
+          # 读取完整旧快照
+          OLD_FULL=$(cat ${{ env.CHECK_FILE }})
+          # 取出旧分支哈希表
+          OLD_BRANCHES=$(jq -c '.branches' <<< "$OLD_FULL")
 
-          # 转换为 {分支名: commit_sha} 结构
-          NEW_STATE=$(jq 'reduce .[] as $item ({}; .[$item.name] = $item.commit.sha)' ${{ env.TMP_DIR }}/branches.json)
-          echo "$NEW_STATE" > ${{ env.CHECK_FILE }}
+          # 从远程接口数据生成新分支哈希表 {name:sha}
+          NEW_BRANCHES=$(jq -c 'reduce .[] as $item ({}; .[$item.name] = $item.commit.sha)' ${{ env.TMP_DIR }}/remote_branches.json)
 
-          # 提取新旧分支名称数组
-          OLD_KEYS=$(jq 'keys' <<< "$OLD_STATE")
-          NEW_KEYS=$(jq 'keys' <<< "$NEW_STATE")
+          # 提取分支名数组
+          OLD_KEYS=$(jq 'keys' <<< "$OLD_BRANCHES")
+          NEW_KEYS=$(jq 'keys' <<< "$NEW_BRANCHES")
 
           # 新增分支
           ADDED=$(jq -n --argjson old "$OLD_KEYS" --argjson new "$NEW_KEYS" '$new - $old | join(" ")')
           # 删除分支
           REMOVED=$(jq -n --argjson old "$OLD_KEYS" --argjson new "$NEW_KEYS" '$old - $new | join(" ")')
-          # 分支存在但是sha不一致 → 代码有更新
-          CHANGED=$(jq -n --argjson old "$OLD_STATE" --argjson new "$NEW_STATE" '
+          # sha变动分支（代码更新）
+          CHANGED=$(jq -n --argjson old "$OLD_BRANCHES" --argjson new "$NEW_BRANCHES" '
             [ $new | keys[] | select($old[.] != $new[.]) ] | join(" ")
           ')
 
-          # 判断是否有任意变更
           HAS_UPDATE="false"
           if [ -n "$ADDED" ] || [ -n "$REMOVED" ] || [ -n "$CHANGED" ]; then
             HAS_UPDATE="true"
           fi
 
-          # 输出变量，供后续邮件使用
+          # 组装新完整快照，保留结构，更新branches + last_run
+          NEW_FULL=$(jq -n \
+            --argjson branches "$NEW_BRANCHES" \
+            --arg last_run "$(date -Iseconds)" \
+            '{branches: $branches, last_run: $last_run}')
+
+          echo "$NEW_FULL" > ${{ env.CHECK_FILE }}
+
+          # 输出变量
           echo "added_branches=$ADDED" >> $GITHUB_OUTPUT
           echo "removed_branches=$REMOVED" >> $GITHUB_OUTPUT
           echo "changed_branches=$CHANGED" >> $GITHUB_OUTPUT
