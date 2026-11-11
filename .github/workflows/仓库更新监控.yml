@@ -65,21 +65,37 @@ jobs:
             exit 1
           fi
 
-      - name: 对比分支 & commit，计算变更
+      - name: 对比分支 & commit，计算变更（修复类型问题）
         id: diff
         run: |
-          OLD_DATA=$(cat ${{ env.CHECK_FILE }})
+          # 读取旧快照，校验json，失败兜底
+          OLD_RAW=$(cat ${{ env.CHECK_FILE }})
+          OLD_DATA=$(echo "$OLD_RAW" | jq 'if type == "object" then . else {"branches":{}} end' 2>/dev/null || echo '{"branches":{}}')
+
+          # 生成新分支sha对象
           NEW_BRANCH_OBJ=$(jq 'reduce .[] as $item ({}; .[$item.name] = ($item.commit?.sha // ""))' ${{ env.TMP_DIR }}/remote_branches.json)
           NEW_DATA=$(jq -n --argjson br "$NEW_BRANCH_OBJ" --arg time "$(date -Iseconds)" '{branches:$br, last_run:$time}')
 
-          ADDED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '$new | keys - ($old.branches | keys) | join(" ")' <<< "$OLD_DATA")
-          REMOVED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '$old.branches | keys - ($new | keys) | join(" ")' <<< "$NEW_BRANCH_OBJ")
-          CHANGED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '
-            [
+          # 新增分支
+          ADDED_BRANCHES=$(jq -n \
+            --argjson new "$NEW_BRANCH_OBJ" \
+            --argjson old "$OLD_DATA" \
+            '$new | keys - ($old.branches | keys) | join(" ")')
+
+          # 删除分支
+          REMOVED_BRANCHES=$(jq -n \
+            --argjson new "$NEW_BRANCH_OBJ" \
+            --argjson old "$OLD_DATA" \
+            '$old.branches | keys - ($new | keys) | join(" ")')
+
+          # commit变更分支
+          CHANGED_BRANCHES=$(jq -n \
+            --argjson new "$NEW_BRANCH_OBJ" \
+            --argjson old "$OLD_DATA" \
+            '[
               ($old.branches | keys[]) as $k
               | select($new[$k] != null and $old.branches[$k] != $new[$k] and $new[$k] != "")
-            ] | join(" ")
-          ' <<< "$OLD_DATA")
+            ] | join(" ")')
 
           echo "added_branches=$ADDED_BRANCHES" >> $GITHUB_OUTPUT
           echo "removed_branches=$REMOVED_BRANCHES" >> $GITHUB_OUTPUT
