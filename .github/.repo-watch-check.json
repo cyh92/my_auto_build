@@ -1,7 +1,6 @@
 {
   "branches": {
-    "release": "2bc207851df311340767e913931ca7b28cab1794",
-    "release-1.11.0-fongmi": "3c2cbe8ac742c2fe15eff52f03eeb3b1b648848d"
+    "release": "2bc207851df311340767e913931ca7b28cab1794"
   },
   "last_run": "2026-11-11T00:53:19+00:00"
 }
