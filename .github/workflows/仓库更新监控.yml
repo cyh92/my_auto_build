@@ -97,18 +97,22 @@ jobs:
               | select($new[$k] != null and $old.branches[$k] != $new[$k] and $new[$k] != "")
             ] | join(" ")')
 
+          # 计算是否更新
+          if [ -n "$ADDED_BRANCHES$REMOVED_BRANCHES$CHANGED_BRANCHES" ];then
+            HAS_UPDATE=true
+          else
+            HAS_UPDATE=false
+          fi
+
+          # 全部输出到 GITHUB_OUTPUT
           echo "added_branches=$ADDED_BRANCHES" >> $GITHUB_OUTPUT
           echo "removed_branches=$REMOVED_BRANCHES" >> $GITHUB_OUTPUT
           echo "changed_branches=$CHANGED_BRANCHES" >> $GITHUB_OUTPUT
+          echo "has_update=$HAS_UPDATE" >> $GITHUB_OUTPUT
           echo "new_data<<EOF" >> $GITHUB_OUTPUT
           echo "$NEW_DATA" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          if [ -n "$ADDED_BRANCHES$REMOVED_BRANCHES$CHANGED_BRANCHES" ];then
-            echo "HAS_UPDATE=true" >> $GITHUB_ENV
-          else
-            echo "HAS_UPDATE=false" >> $GITHUB_ENV
-          fi
 
       - name: 输出结果
         run: |
