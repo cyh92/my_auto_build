@@ -118,7 +118,7 @@ jobs:
           echo "代码变更分支：${{ steps.diff.outputs.changed_branches }}"
 
       - name: 发送邮件通知
-        if: env.HAS_UPDATE == 'true'
+        if: steps.diff.outputs.has_update == 'true'
         env:
           MAIL_USERNAME: cyh92@139.com
           MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
@@ -129,6 +129,7 @@ jobs:
           REMOVED: ${{ steps.diff.outputs.removed_branches }}
           CHANGED: ${{ steps.diff.outputs.changed_branches }}
           NEW_DATA: ${{ steps.diff.outputs.new_data }}
+          TARGET_REPO: ${{ env.TARGET_REPO }}
         run: |
           python3 - <<'PY'
           import os, json, ssl, smtplib, datetime
@@ -162,42 +163,47 @@ jobs:
               f"{len(changed)} 个分支代码更新" if changed else "",
           ] if t])
 
-          def ul(names):
+          def lines(names):
               if not names:
-                  return '<p style="margin:4px 0;color:#888">无</p>'
-              items = []
+                  return "  无\n"
+              buf = ""
               for b in names:
                   sha = branches.get(b, "")
-                  url = f"https://github.com/{repo}/commit/{sha}" if sha else f"https://github.com/{repo}/commits/{b}"
-                  label = sha[:8] if sha else "查看分支"
-                  items.append(f'<li><b>{b}</b> — <a href="{url}">{label}</a></li>')
-              return "<ul style='margin:4px 0 12px 18px;padding:0'>" + "".join(items) + "</ul>"
+                  if sha:
+                      buf += f"  - {b}  SHA:{sha[:8]}  https://github.com/{repo}/commit/{sha}\n"
+                  else:
+                      buf += f"  - {b}  分支地址：https://github.com/{repo}/commits/{b}\n"
+              return buf
 
-          html = f"""<div style="font-family:-apple-system,Segoe UI,Microsoft YaHei,sans-serif;font-size:14px;color:#222">
-          <h3 style="margin:0 0 8px">仓库更新提醒：<a href="https://github.com/{repo}">{repo}</a></h3>
-          <p style="margin:0 0 12px;color:#666">检测时间：{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}（UTC）</p>
-          <h4 style="margin:12px 0 2px">🆕 新增分支（{len(added)}）</h4>{ul(added)}
-          <h4 style="margin:12px 0 2px">📝 代码有更新（{len(changed)}）</h4>{ul(changed)}
-          <h4 style="margin:12px 0 2px">🗑 已删除分支（{len(removed)}）</h4>{ul(removed)}
-          <p style="margin-top:16px;color:#999;font-size:12px">由 GitHub Actions 自动发送 · 当前快照共 {len(branches)} 个分支</p>
-          </div>"""
-
-          msg = MIMEText(html, "html", "utf-8")
-          msg["Subject"] = Header(subject, "utf-8")
-          msg["From"] = formataddr(("GitHub Actions", user))
-          msg["To"] = ", ".join(to)
-          msg["Date"] = formatdate(localtime=True)
-
-          if port == 465:
-              server = smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=30)
-          else:
-              server = smtplib.SMTP(host, port, timeout=30)
-              server.starttls(context=ssl.create_default_context())
-          server.login(user, pwd)
-          server.sendmail(user, to, msg.as_string())
-          server.quit()
-          print("✅ 邮件已发送 ->", ", ".join(to))
-          PY
+          text = f"""仓库更新提醒：{repo}
+            检测时间：{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC
+            
+            🆕 新增分支（{len(added)}）
+            {lines(added)}
+            📝 代码有更新（{len(changed)}）
+            {lines(changed)}
+            🗑 已删除分支（{len(removed)}）
+            {lines(removed)}
+            
+            由 GitHub Actions 自动发送
+            当前快照共 {len(branches)} 个分支
+            """
+              msg = MIMEText(text, "plain", "utf-8")
+              msg["Subject"] = Header(subject, "utf-8")
+              msg["From"] = formataddr(("ActionsNotify", user))
+              msg["To"] = ", ".join(to)
+              msg["Date"] = formatdate(localtime=True)
+    
+              if port == 465:
+                  server = smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=30)
+              else:
+                  server = smtplib.SMTP(host, port, timeout=30)
+                  server.starttls(context=ssl.create_default_context())
+              server.login(user, pwd)
+              server.sendmail(user, to, msg.as_string())
+              server.quit()
+              print("✅ 邮件已发送 ->", ", ".join(to))
+              PY
 
 
       - name: 写入新快照
