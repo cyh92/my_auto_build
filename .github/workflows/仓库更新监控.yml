@@ -68,50 +68,40 @@ jobs:
       - name: 对比分支 & commit，计算变更（修复类型问题）
         id: diff
         run: |
-          # 读取旧快照，校验json，失败兜底
-          OLD_RAW=$(cat ${{ env.CHECK_FILE }})
-          OLD_DATA=$(echo "$OLD_RAW" | jq 'if type == "object" then . else {"branches":{}} end' 2>/dev/null || echo '{"branches":{}}')
-
-          # 生成新分支sha对象
-          NEW_BRANCH_OBJ=$(jq 'reduce .[] as $item ({}; .[$item.name] = ($item.commit?.sha // ""))' ${{ env.TMP_DIR }}/remote_branches.json)
-          NEW_DATA=$(jq -n --argjson br "$NEW_BRANCH_OBJ" --arg time "$(date -Iseconds)" '{branches:$br, last_run:$time}')
-
-          # 新增分支
-          ADDED_BRANCHES=$(jq -n \
-            --argjson new "$NEW_BRANCH_OBJ" \
-            --argjson old "$OLD_DATA" \
-            '$new | keys - ($old.branches | keys) | join(" ")')
-
-          # 删除分支
-          REMOVED_BRANCHES=$(jq -n \
-            --argjson new "$NEW_BRANCH_OBJ" \
-            --argjson old "$OLD_DATA" \
-            '$old.branches | keys - ($new | keys) | join(" ")')
-
-          # commit变更分支
-          CHANGED_BRANCHES=$(jq -n \
-            --argjson new "$NEW_BRANCH_OBJ" \
-            --argjson old "$OLD_DATA" \
-            '[
-              ($old.branches | keys[]) as $k
-              | select($new[$k] != null and $old.branches[$k] != $new[$k] and $new[$k] != "")
-            ] | join(" ")')
-
-          # 计算是否更新
-          if [ -n "$ADDED_BRANCHES$REMOVED_BRANCHES$CHANGED_BRANCHES" ];then
-            HAS_UPDATE=true
-          else
-            HAS_UPDATE=false
+          # 读取上一次的快照，不存在则初始化为空对象
+          OLD_STATE="{}"
+          if [ -f ${{ env.CHECK_FILE }} ]; then
+            OLD_STATE=$(cat ${{ env.CHECK_FILE }})
           fi
 
-          # 全部输出到 GITHUB_OUTPUT
-          echo "added_branches=$ADDED_BRANCHES" >> $GITHUB_OUTPUT
-          echo "removed_branches=$REMOVED_BRANCHES" >> $GITHUB_OUTPUT
-          echo "changed_branches=$CHANGED_BRANCHES" >> $GITHUB_OUTPUT
+          # 转换为 {分支名: commit_sha} 结构
+          NEW_STATE=$(jq 'reduce .[] as $item ({}; .[$item.name] = $item.commit.sha)' ${{ env.TMP_DIR }}/branches.json)
+          echo "$NEW_STATE" > ${{ env.CHECK_FILE }}
+
+          # 提取新旧分支名称数组
+          OLD_KEYS=$(jq 'keys' <<< "$OLD_STATE")
+          NEW_KEYS=$(jq 'keys' <<< "$NEW_STATE")
+
+          # 新增分支
+          ADDED=$(jq -n --argjson old "$OLD_KEYS" --argjson new "$NEW_KEYS" '$new - $old | join(" ")')
+          # 删除分支
+          REMOVED=$(jq -n --argjson old "$OLD_KEYS" --argjson new "$NEW_KEYS" '$old - $new | join(" ")')
+          # 分支存在但是sha不一致 → 代码有更新
+          CHANGED=$(jq -n --argjson old "$OLD_STATE" --argjson new "$NEW_STATE" '
+            [ $new | keys[] | select($old[.] != $new[.]) ] | join(" ")
+          ')
+
+          # 判断是否有任意变更
+          HAS_UPDATE="false"
+          if [ -n "$ADDED" ] || [ -n "$REMOVED" ] || [ -n "$CHANGED" ]; then
+            HAS_UPDATE="true"
+          fi
+
+          # 输出变量，供后续邮件使用
+          echo "added_branches=$ADDED" >> $GITHUB_OUTPUT
+          echo "removed_branches=$REMOVED" >> $GITHUB_OUTPUT
+          echo "changed_branches=$CHANGED" >> $GITHUB_OUTPUT
           echo "has_update=$HAS_UPDATE" >> $GITHUB_OUTPUT
-          echo "new_data<<EOF" >> $GITHUB_OUTPUT
-          echo "$NEW_DATA" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
 
       - name: 输出结果
