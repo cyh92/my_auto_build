@@ -1,4 +1,4 @@
-name: 仓库更新监控（快照存本仓库）
+name: 仓库更新监控（快照存本仓库，修复限流报错）
 run-name: 监控仓库变更
 on:
   schedule:
@@ -16,9 +16,9 @@ jobs:
   check-repo-update:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 关键！允许提交推送快照文件
+      contents: write # 允许提交推送快照文件
     steps:
-      - name: 检出当前仓库（快照存在这里）
+      - name: 检出当前仓库
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -26,39 +26,54 @@ jobs:
       - name: 安装 jq
         run: sudo apt-get install -y jq
 
-      - name: 初始化快照文件（不存在就新建）
+      - name: 初始化快照文件
         run: |
           mkdir -p $(dirname ${{ env.CHECK_FILE }})
           if [ ! -f ${{ env.CHECK_FILE }} ];then
             echo '{"branches":{},"last_run":""}' > ${{ env.CHECK_FILE }}
           fi
 
-      - name: 获取目标仓库分支列表
+      - name: 获取目标仓库分支列表（带状态码校验）
         id: fetch_remote
         run: |
           mkdir -p ${{ env.TMP_DIR }}
-          curl -s -H "Authorization: token ${{ secrets.WATCH_PAT }}" \
-            https://api.github.com/repos/${{ env.TARGET_REPO }}/branches?per_page=100 \
-            > ${{ env.TMP_DIR }}/remote_branches.json
+          API_URL="https://api.github.com/repos/${{ env.TARGET_REPO }}/branches?per_page=100"
+          echo "GET $API_URL"
+          # 保存响应体 + http状态码
+          HTTP_CODE=$(curl -s -w "%{http_code}" -H "Authorization: token ${{ secrets.WATCH_PAT }}" \
+            $API_URL > ${{ env.TMP_DIR }}/remote_branches.json; echo $?)
+          echo "HTTP_CODE=$HTTP_CODE"
+          cat ${{ env.TMP_DIR }}/remote_branches.json
+
+          if [ "$HTTP_CODE" -ne 200 ];then
+            echo "❌ GitHub API 请求失败，http code: $HTTP_CODE"
+            exit 1
+          fi
+          # 校验是不是数组（防止返回message对象）
+          IS_ARRAY=$(jq 'if type=="array" then 1 else 0 end' ${{ env.TMP_DIR }}/remote_branches.json)
+          if [ "$IS_ARRAY" != "1" ];then
+            echo "❌ API 返回不是分支数组，大概率限流/权限错误"
+            exit 1
+          fi
 
       - name: 对比分支 & commit，计算变更
         id: diff
         run: |
           # 读取旧快照
           OLD_DATA=$(cat ${{ env.CHECK_FILE }})
-          # 构造新快照
-          NEW_BRANCH_OBJ=$(jq 'reduce .[] as $item ({}; .[$item.name] = $item.commit.sha)' ${{ env.TMP_DIR }}/remote_branches.json)
+          # 安全读取：commit?.sha 不存在时返回null，不报错
+          NEW_BRANCH_OBJ=$(jq 'reduce .[] as $item ({}; .[$item.name] = ($item.commit?.sha // ""))' ${{ env.TMP_DIR }}/remote_branches.json)
           NEW_DATA=$(jq -n --argjson br "$NEW_BRANCH_OBJ" --arg time "$(date -Iseconds)" '{branches:$br, last_run:$time}')
 
-          # 新增分支：在新里存在、旧里不存在
+          # 新增分支：新存在、旧不存在
           ADDED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '$new | keys - ($old.branches | keys) | join(" ")' <<< "$OLD_DATA")
-          # 分支被删除：旧里有、新里没有
+          # 删除分支：旧存在、新不存在
           REMOVED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '$old.branches | keys - ($new | keys) | join(" ")' <<< "$NEW_BRANCH_OBJ")
-          # 代码有更新的分支：两边都存在，sha不一致
+          # 分支两边都存在，sha不一致=代码变更
           CHANGED_BRANCHES=$(jq -r --argjson new "$NEW_BRANCH_OBJ" --argjson old "$OLD_DATA" '
             [
               ($old.branches | keys[]) as $k
-              | select($new[$k] != null and $old.branches[$k] != $new[$k])
+              | select($new[$k] != null and $old.branches[$k] != $new[$k] and $new[$k] != "")
             ] | join(" ")
           ' <<< "$OLD_DATA")
 
@@ -69,7 +84,6 @@ jobs:
           echo "$NEW_DATA" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # 判断是否有更新
           if [ -n "$ADDED_BRANCHES$REMOVED_BRANCHES$CHANGED_BRANCHES" ];then
             echo "HAS_UPDATE=true" >> $GITHUB_ENV
           else
@@ -83,7 +97,7 @@ jobs:
           echo "删除分支：${{ steps.diff.outputs.removed_branches }}"
           echo "代码变更分支：${{ steps.diff.outputs.changed_branches }}"
 
-      - name: 发送通知（企业微信示例，不需要就删掉）
+      - name: 发送通知（企业微信，不需要就删掉）
         if: 1 == 'true'
         run: |
           curl -s -X POST ${{ secrets.WECOM_WEBHOOK }} \
@@ -95,11 +109,11 @@ jobs:
             }
           }'
 
-      - name: 写入新快照到 check 文件
+      - name: 写入新快照
         run: |
           echo '${{ steps.diff.outputs.new_data }}' > ${{ env.CHECK_FILE }}
 
-      - name: 提交并推送快照变更
+      - name: 提交推送快照
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
