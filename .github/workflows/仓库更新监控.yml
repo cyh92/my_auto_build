@@ -128,11 +128,11 @@ jobs:
           server_address: smtp.139.com
           server_port: 465
           secure: true
-          username: ${{ secrets.MAIL_USERNAME }}
+          username: cyh92@139.com
           password: ${{ secrets.MAIL_PASSWORD }}
           subject: 仓库通知 fongmi/media
           to: cyh92@139.com
-          from: GitHub监控 <cyh92@139.com>
+          from: cyh92@139.com
           body: |
             新增分支：${{ steps.diff.outputs.added_branches }}
             删除分支：${{ steps.diff.outputs.removed_branches }}
