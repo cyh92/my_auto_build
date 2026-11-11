@@ -117,17 +117,88 @@ jobs:
           echo "删除分支：${{ steps.diff.outputs.removed_branches }}"
           echo "代码变更分支：${{ steps.diff.outputs.changed_branches }}"
 
-      - name: 发送通知（企业微信，不需要直接删掉）
-        if: 1 == 'true'
+      - name: 发送邮件通知
+        if: env.HAS_UPDATE == 'true'
+        env:
+          MAIL_USERNAME: cyh92@139.com
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          MAIL_TO: cyh92@139.com
+          SMTP_HOST: smtp.139.com
+          SMTP_PORT: 465
+          ADDED: ${{ steps.diff.outputs.added_branches }}
+          REMOVED: ${{ steps.diff.outputs.removed_branches }}
+          CHANGED: ${{ steps.diff.outputs.changed_branches }}
+          NEW_DATA: ${{ steps.diff.outputs.new_data }}
         run: |
-          curl -s -X POST ${{ secrets.WECOM_WEBHOOK }} \
-          -H "Content-Type: application/json" \
-          -d '{
-            "msgtype": "text",
-            "text": {
-              "content": "仓库【${{ env.TARGET_REPO }}】变更通知\n新增分支：${{ steps.diff.outputs.added_branches }}\n删除分支：${{ steps.diff.outputs.removed_branches }}\n代码更新分支：${{ steps.diff.outputs.changed_branches }}"
-            }
-          }'
+          python3 - <<'PY'
+          import os, json, ssl, smtplib, datetime
+          from email.mime.text import MIMEText
+          from email.header import Header
+          from email.utils import formataddr, formatdate
+
+          host = os.environ.get("SMTP_HOST").strip()
+          port = int(os.environ.get("SMTP_PORT").strip())
+          user = (os.environ.get("MAIL_USERNAME") or "").strip()
+          pwd  = (os.environ.get("MAIL_PASSWORD") or "").strip()
+          to   = [x.strip() for x in (os.environ.get("MAIL_TO") or "").replace(";", ",").split(",") if x.strip()]
+          repo = os.environ.get("TARGET_REPO", "")
+
+          added   = [x for x in (os.environ.get("ADDED") or "").split() if x]
+          removed = [x for x in (os.environ.get("REMOVED") or "").split() if x]
+          changed = [x for x in (os.environ.get("CHANGED") or "").split() if x]
+
+          try:
+              snap = json.loads(os.environ.get("NEW_DATA") or "{}")
+          except Exception:
+              snap = {}
+          branches = snap.get("branches") or {}
+
+          if not user or not pwd or not to:
+              raise SystemExit("邮件参数缺失：MAIL_USERNAME / MAIL_PASSWORD / MAIL_TO")
+
+          subject = f"[仓库更新] {repo} " + "，".join([t for t in [
+              f"新增 {len(added)} 个分支" if added else "",
+              f"删除 {len(removed)} 个分支" if removed else "",
+              f"{len(changed)} 个分支代码更新" if changed else "",
+          ] if t])
+
+          def ul(names):
+              if not names:
+                  return '<p style="margin:4px 0;color:#888">无</p>'
+              items = []
+              for b in names:
+                  sha = branches.get(b, "")
+                  url = f"https://github.com/{repo}/commit/{sha}" if sha else f"https://github.com/{repo}/commits/{b}"
+                  label = sha[:8] if sha else "查看分支"
+                  items.append(f'<li><b>{b}</b> — <a href="{url}">{label}</a></li>')
+              return "<ul style='margin:4px 0 12px 18px;padding:0'>" + "".join(items) + "</ul>"
+
+          html = f"""<div style="font-family:-apple-system,Segoe UI,Microsoft YaHei,sans-serif;font-size:14px;color:#222">
+          <h3 style="margin:0 0 8px">仓库更新提醒：<a href="https://github.com/{repo}">{repo}</a></h3>
+          <p style="margin:0 0 12px;color:#666">检测时间：{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}（UTC）</p>
+          <h4 style="margin:12px 0 2px">🆕 新增分支（{len(added)}）</h4>{ul(added)}
+          <h4 style="margin:12px 0 2px">📝 代码有更新（{len(changed)}）</h4>{ul(changed)}
+          <h4 style="margin:12px 0 2px">🗑 已删除分支（{len(removed)}）</h4>{ul(removed)}
+          <p style="margin-top:16px;color:#999;font-size:12px">由 GitHub Actions 自动发送 · 当前快照共 {len(branches)} 个分支</p>
+          </div>"""
+
+          msg = MIMEText(html, "html", "utf-8")
+          msg["Subject"] = Header(subject, "utf-8")
+          msg["From"] = formataddr(("GitHub Actions", user))
+          msg["To"] = ", ".join(to)
+          msg["Date"] = formatdate(localtime=True)
+
+          if port == 465:
+              server = smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=30)
+          else:
+              server = smtplib.SMTP(host, port, timeout=30)
+              server.starttls(context=ssl.create_default_context())
+          server.login(user, pwd)
+          server.sendmail(user, to, msg.as_string())
+          server.quit()
+          print("✅ 邮件已发送 ->", ", ".join(to))
+          PY
+
 
       - name: 写入新快照
         run: |
