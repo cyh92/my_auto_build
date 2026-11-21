@@ -26,8 +26,8 @@ on:
         default: "aar"  
 
 env:
-  AAR_REPO: "ricky0829/TV"
-  AAR_TAG: "aar"
+  AAR_REPO: "lixiangyong9131/TV"
+  AAR_TAG: "ci-libs"
   AAR_DIR: "media_libs"
   # 失败重试次数（GitHub 下载偶发 502/限流）
   CURL_RETRY: "3"
