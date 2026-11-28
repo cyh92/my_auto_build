@@ -200,7 +200,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-Media3-${{ steps.date.outputs.datetime }}
-          name: Release AAR Media3-${{ steps.date.outputs.datetime }}
+          name: ${{ inputs.target_branch }}-Release AAR Media3-${{ steps.date.outputs.datetime }}
           files: |
             Media3-AARs.zip
             media_aars/*.aar
